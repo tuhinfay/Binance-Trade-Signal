@@ -39,7 +39,7 @@ async function bybitRequest(apiPath){
   if(u.pathname.endsWith("/ticker/24hr")){
     endpoint="/v5/market/tickers";if(symbol)params.set("symbol",symbol);
     const r=await fetch(BYBIT_HOST+endpoint+"?"+params,{headers:{"Accept":"application/json"},signal:AbortSignal.timeout(10000)});
-    if(!r.ok)throw new Error("Bybit HTTP "+r.status);const j=await r.json();if(j.retCode!==0){if([10006,10018].includes(j.retCode))bybitCooldownUntil=Date.now()+60000;throw new Error("Bybit "+j.retCode+": "+j.retMsg);}
+    if(!r.ok){if(r.status===403||r.status===429||r.status>=500)bybitCooldownUntil=Date.now()+60000;throw new Error("Bybit HTTP "+r.status);}const j=await r.json();if(j.retCode!==0){if([10006,10018].includes(j.retCode))bybitCooldownUntil=Date.now()+60000;throw new Error("Bybit "+j.retCode+": "+j.retMsg);}
     const rows=(j.result.list||[]).map(t=>({symbol:t.symbol,lastPrice:t.lastPrice,openPrice:t.prevPrice24h,priceChangePercent:String(Number(t.price24hPcnt)*100),highPrice:t.highPrice24h,lowPrice:t.lowPrice24h,quoteVolume:t.turnover24h,count:0}));return symbol?rows[0]:rows;
   }
   if(u.pathname.endsWith("/klines")){
@@ -66,8 +66,8 @@ async function bybitRequest(apiPath){
 }
 async function marketData(apiPath){
   try{const data=await binance(apiPath);lastDataSource="BINANCE";return data;}
-  catch(primary){try{const data=await bybitRequest(apiPath);lastDataSource="BYBIT";return data;}
-    catch(backup){throw new Error("Primary Binance failed ("+primary.message+"); Bybit fallback failed ("+backup.message+")");}}
+  catch(primary){console.warn("[market-data] Binance unavailable; trying Bybit V5 Spot fallback:",primary.message);try{const data=await bybitRequest(apiPath);lastDataSource="BYBIT";return data;}
+    catch(backup){console.error("[market-data] Bybit fallback unavailable:",backup.message);throw new Error("Primary Binance failed ("+primary.message+"); Bybit fallback failed ("+backup.message+")");}}
 }
 
 async function getOne(symbol,hint){
