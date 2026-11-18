@@ -29,11 +29,11 @@ async function binance(apiPath){
   throw new Error("Binance endpoints unavailable: "+failures.join(" | "));
 }
 async function getOne(symbol,hint){
-  const t=hint||await binance("/api/v3/ticker/24hr?symbol="+encodeURIComponent(symbol));
+  const t=hint||await marketData("/api/v3/ticker/24hr?symbol="+encodeURIComponent(symbol));
   let open=Number(t.openPrice),sessionChange=Number(t.priceChangePercent);
   const cached=pairCache.get(symbol);
   if(cached&&Date.now()-cached.at<300000)open=cached.open;
-  else try{const k=await binance("/api/v3/klines?symbol="+encodeURIComponent(symbol)+"&interval=1d&timeZone=6&limit=1");if(k.length){open=Number(k[0][1]);pairCache.set(symbol,{at:Date.now(),open});}}catch(e){console.warn("[session]",symbol,e.message);}
+  else if(lastDataSource!=="BYBIT")try{const k=await marketData("/api/v3/klines?symbol="+encodeURIComponent(symbol)+"&interval=1d&timeZone=6&limit=1");if(k.length){open=Number(k[0][1]);pairCache.set(symbol,{at:Date.now(),open});}}catch(e){console.warn("[session]",symbol,e.message);}
   const price=Number(t.lastPrice);if(open>0)sessionChange=(price-open)/open*100;
   return {symbol:t.symbol,price,change24h:Number(t.priceChangePercent),sessionChange,quoteVolume:Number(t.quoteVolume),high:Number(t.highPrice),low:Number(t.lowPrice),open,trades:Number(t.count)};
 }
@@ -41,7 +41,7 @@ async function getMarket(){
   if(marketCache.data&&Date.now()-marketCache.at<MARKET_TTL_MS)return marketCache.data;
   if(marketInFlight)return marketInFlight;
   marketInFlight=(async()=>{
-    const ticks=await binance("/api/v3/ticker/24hr");
+    const ticks=await marketData("/api/v3/ticker/24hr");
     const liquid=ticks.filter(x=>x.symbol.endsWith("USDT")&&!STABLE_BASES.has(x.symbol.slice(0,-4))&&!/(UP|DOWN|BULL|BEAR)USDT$/.test(x.symbol)&&Number(x.quoteVolume)>1000000).sort((a,b)=>Number(b.quoteVolume)-Number(a.quoteVolume)).slice(0,35);
     let cursor=0;const rows=new Array(liquid.length);
     async function worker(){while(cursor<liquid.length){const i=cursor++,t=liquid[i];try{rows[i]=await getOne(t.symbol,t);}catch(e){rows[i]={symbol:t.symbol,price:Number(t.lastPrice),change24h:Number(t.priceChangePercent),sessionChange:Number(t.priceChangePercent),quoteVolume:Number(t.quoteVolume),high:Number(t.highPrice),low:Number(t.lowPrice),open:Number(t.openPrice),fallback:true};}}}
@@ -93,7 +93,7 @@ async function monitorTrades(){
         const lastChecked=t.last_checked_at?new Date(t.last_checked_at).getTime():new Date(t.opened_at).getTime();
         const interval=Date.now()-lastChecked>1000*60*1000?"1h":"1m";
         const intervalMs=interval==="1h"?3600000:60000;
-        const candles=await binance("/api/v3/klines?symbol="+encodeURIComponent(t.symbol)+"&interval="+interval+"&startTime="+Math.max(0,lastChecked+1)+"&limit=1000");
+        const candles=await marketData("/api/v3/klines?symbol="+encodeURIComponent(t.symbol)+"&interval="+interval+"&startTime="+Math.max(0,lastChecked+1)+"&limit=1000");
         for(const k of candles){
           if(Number(k[6])>=Date.now())continue;
           const high=Number(k[2]),low=Number(k[3]),close=Number(k[4]);
@@ -101,11 +101,11 @@ async function monitorTrades(){
           t.last_checked_at=new Date(Number(k[6]));
         }
         if(t.last_checked_at&&t.status!=="CLOSED"){
-          const p=await binance("/api/v3/ticker/price?symbol="+encodeURIComponent(t.symbol)),price=Number(p.price);
+          const p=await marketData("/api/v3/ticker/price?symbol="+encodeURIComponent(t.symbol)),price=Number(p.price);
           if(await applyPrice(price))continue;
           await updateTrade(t);
         }else if(t.status!=="CLOSED"){
-          const p=await binance("/api/v3/ticker/price?symbol="+encodeURIComponent(t.symbol)),price=Number(p.price);
+          const p=await marketData("/api/v3/ticker/price?symbol="+encodeURIComponent(t.symbol)),price=Number(p.price);
           if(await applyPrice(price))continue;
           await updateTrade(t);
         }
@@ -122,8 +122,8 @@ async function serveStatic(req,res,url){
 const server=http.createServer(async(req,res)=>{
   const url=new URL(req.url,"http://localhost");
   if(url.pathname==="/health")return sendJson(res,200,{ok:true,database:databaseStatus(),signalEngine:true,tradeMonitor:true});
-  if(url.pathname==="/api/market"){try{return sendJson(res,200,await getMarket());}catch(e){return sendJson(res,502,{error:"Unable to load Binance market data",detail:e.message});}}
-  if(url.pathname==="/api/signals"){try{await monitorTrades();return sendJson(res,200,{updatedAt:new Date(lastSignalScanAt||Date.now()).toISOString(),signals:await scanSignals(url.searchParams.get("refresh")==="1")});}catch(e){try{const saved=await readSignals();if(saved.length)return sendJson(res,200,{stale:true,error:"Live scan unavailable; showing last saved signals",signals:saved});}catch(_){}return sendJson(res,502,{error:"Signal scan unavailable",detail:e.message});}}
+  if(url.pathname==="/api/market"){try{return sendJson(res,200,await getMarket());}catch(e){return sendJson(res,502,{error:"Unable to load market data from all providers",detail:e.message});}}
+  if(url.pathname==="/api/signals"){try{await monitorTrades();const signals=await scanSignals(url.searchParams.get("refresh")==="1");return sendJson(res,200,{updatedAt:new Date(lastSignalScanAt||Date.now()).toISOString(),source:lastDataSource,signals});}catch(e){try{const saved=await readSignals();if(saved.length)return sendJson(res,200,{stale:true,error:"Live scan unavailable; showing last saved signals",signals:saved});}catch(_){}return sendJson(res,502,{error:"Signal scan unavailable",detail:e.message});}}
   if(url.pathname==="/api/trades"&&req.method==="GET"){try{return sendJson(res,200,(await listTrades(url.searchParams.get("history")==="1")).map(tradeJson));}catch(e){return sendJson(res,503,{error:e.message});}}
   if(url.pathname==="/api/trades"&&req.method==="POST"){
     try{let body="";for await(const chunk of req)body+=chunk;const x=JSON.parse(body||"{}");const symbol=String(x.symbol||"").toUpperCase(),side=String(x.side||"").toUpperCase();
