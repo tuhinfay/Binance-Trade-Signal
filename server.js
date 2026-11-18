@@ -11,7 +11,7 @@ const MONITOR_MS=Math.max(10000,Number(process.env.TRADE_MONITOR_MS||15000));
 const HOSTS=["https://api.binance.com","https://api1.binance.com","https://api2.binance.com","https://api3.binance.com","https://api4.binance.com","https://data-api.binance.vision"];
 const hostCooldown=new Map(),pairCache=new Map();
 let marketCache={at:0,data:null},marketInFlight=null,lastSnapshotAt=0,lastSignalScanAt=0,signalCache=[],signalScanInFlight=null,monitorInFlight=null;
-const CORE=["BTCUSDT","ETHUSDT","BNBUSDT","XRPUSDT","SOLUSDT"];
+const CORE=["BTCUSDT","ETHUSDT","BNBUSDT","XRPUSDT","SOLUSDT"];\nconst STABLE_BASES=new Set(["USDC","FDUSD","TUSD","USDP","DAI","BUSD","EUR","AEUR","USDE","XUSD","USD1"]);
 const mime={".html":"text/html; charset=utf-8",".css":"text/css; charset=utf-8",".js":"text/javascript; charset=utf-8",".json":"application/json; charset=utf-8",".svg":"image/svg+xml"};
 
 function sendJson(res,status,body){res.writeHead(status,{"content-type":"application/json; charset=utf-8","cache-control":"no-store","x-content-type-options":"nosniff"});res.end(JSON.stringify(body));}
@@ -41,7 +41,7 @@ async function getMarket(){
   if(marketInFlight)return marketInFlight;
   marketInFlight=(async()=>{
     const ticks=await binance("/api/v3/ticker/24hr");
-    const liquid=ticks.filter(x=>x.symbol.endsWith("USDT")&&!/(UP|DOWN|BULL|BEAR)USDT$/.test(x.symbol)&&Number(x.quoteVolume)>1000000).sort((a,b)=>Number(b.quoteVolume)-Number(a.quoteVolume)).slice(0,35);
+    const liquid=ticks.filter(x=>x.symbol.endsWith("USDT")&&!STABLE_BASES.has(x.symbol.slice(0,-4))&&!/(UP|DOWN|BULL|BEAR)USDT$/.test(x.symbol)&&Number(x.quoteVolume)>1000000).sort((a,b)=>Number(b.quoteVolume)-Number(a.quoteVolume)).slice(0,35);
     let cursor=0;const rows=new Array(liquid.length);
     async function worker(){while(cursor<liquid.length){const i=cursor++,t=liquid[i];try{rows[i]=await getOne(t.symbol,t);}catch(e){rows[i]={symbol:t.symbol,price:Number(t.lastPrice),change24h:Number(t.priceChangePercent),sessionChange:Number(t.priceChangePercent),quoteVolume:Number(t.quoteVolume),high:Number(t.highPrice),low:Number(t.lowPrice),open:Number(t.openPrice),fallback:true};}}}
     await Promise.all(Array.from({length:3},worker));
