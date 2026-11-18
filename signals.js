@@ -48,7 +48,7 @@ function analyzeFrames(symbol, frames, book) {
   let risk=price-stopBase,stop=stopBase;
   if(risk<0.8*a){risk=0.8*a;stop=price-risk;}
   const room=recentHigh>price?recentHigh-price:Infinity;
-  const rr=room===Infinity?3:room/risk;
+  const rr=room===Infinity?3:room/risk;\n  points.rr=rr>=2.5?15:rr>=1.5?10:0;\n  const score=Object.values(points).reduce((x,y)=>x+y,0);
   const blocked=[];
   if(points.trend<15)blocked.push("4h/1h trend alignment missing");
   if(rvol<0.7)blocked.push("Volume too weak");
