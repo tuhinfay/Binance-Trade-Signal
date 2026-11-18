@@ -59,10 +59,12 @@ async function scanSignals(force=false){
   if(signalScanInFlight)return signalScanInFlight;
   signalScanInFlight=(async()=>{
     const market=await getMarket(),liquid=market.markets.slice().sort((a,b)=>b.quoteVolume-a.quoteVolume).slice(0,7).map(x=>x.symbol);
-    const symbols=[...new Set([...CORE,...liquid])];let cursor=0;const out=new Array(symbols.length);
-    async function worker(){while(cursor<symbols.length){const i=cursor++,symbol=symbols[i];try{out[i]=await analyzeSymbol(symbol,binance);await saveSignal(out[i]);}catch(e){console.warn("[signal]",symbol,e.message);}}}
+    const symbols=[...new Set([...CORE,...liquid])];let cursor=0;const out=new Array(symbols.length),failures=[];
+    async function worker(){while(cursor<symbols.length){const i=cursor++,symbol=symbols[i];try{out[i]=await analyzeSymbol(symbol,binance);await saveSignal(out[i]);}catch(e){failures.push(symbol+": "+e.message);console.warn("[signal]",symbol,e.message);}}}
     await Promise.all(Array.from({length:2},worker));
-    signalCache=out.filter(Boolean).sort((a,b)=>b.score-a.score);lastSignalScanAt=Date.now();
+    const results=out.filter(Boolean).sort((a,b)=>b.score-a.score);
+    if(!results.length)throw new Error("No symbols could be analyzed. Binance API may be rate-limiting or blocking this server. "+failures.slice(0,3).join(" | "));
+    signalCache=results;lastSignalScanAt=Date.now();
     return signalCache;
   })().finally(()=>signalScanInFlight=null);
   return signalScanInFlight;
