@@ -28,3 +28,31 @@ $("add-form").addEventListener("submit",async e=>{
 });
 $("notify").addEventListener("click",async()=>{if(!("Notification"in window)){toast("Notifications are not supported by this browser");return}const p=await Notification.requestPermission();toast(p==="granted"?"Browser notifications enabled":"Notification permission not granted");if(p==="granted")new Notification("Binance Trade Signal",{body:"Browser notifications are enabled while this app is open."})});
 load();setInterval(load,60000);
+async function loadSignals(force=false){
+ const box=$("signals");if(!box)return;
+ try{
+  const r=await fetch("/api/signals"+(force?"?refresh=1":""),{cache:"no-store"}),d=await r.json();
+  if(!r.ok)throw new Error(d.detail||d.error||"Signal scan failed");
+  const rows=(d.signals||[]).filter(x=>x.side==="LONG"&&x.plan);
+  box.innerHTML=rows.length?rows.map(x=>'<article class="signal-card"><div class="signal-top"><div><b>'+esc(x.symbol)+'</b><span class="signal-grade">'+esc(x.grade||"SETUP")+'</span></div><strong>'+Number(x.score||0)+'/100</strong></div><div class="signal-levels"><span>Entry <b>$'+fmt(x.plan.entry)+'</b></span><span>Stop <b class="negative">$'+fmt(x.plan.stop)+'</b></span><span>TP1 <b class="positive">$'+fmt(x.plan.tp1)+'</b></span><span>TP2 <b class="positive">$'+fmt(x.plan.tp2)+'</b></span><span>TP3 <b class="positive">$'+fmt(x.plan.tp3)+'</b></span></div><p class="signal-reasons">'+esc((x.reasons||[]).join(" · ")||"Multi-timeframe confluence passed")+'</p><button class="primary-btn track-signal" data-symbol="'+esc(x.symbol)+'">Track this trade</button></article>').join(""):'<div class="empty">No qualified LONG setup right now. WAIT is safer than forcing a trade.</div>';
+  box.querySelectorAll(".track-signal").forEach(b=>b.addEventListener("click",()=>trackSignal(b.dataset.symbol,rows)));
+ }catch(e){box.innerHTML='<div class="empty">Signal engine unavailable: '+esc(e.message)+'</div>'}
+}
+async function trackSignal(symbol,rows){
+ const s=rows.find(x=>x.symbol===symbol);if(!s||!s.plan)return;
+ try{
+  const p=s.plan,r=await fetch("/api/trades",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({symbol,side:"LONG",entry:p.entry,stop:p.stop,tp1:p.tp1,tp2:p.tp2,tp3:p.tp3,trailDistance:p.trail_dist,notes:"Tracked from signal score "+s.score})});
+  const d=await r.json();if(!r.ok)throw new Error(d.detail||d.error||"Could not save trade");
+  toast(symbol+" trade saved in Neon");loadTrades();
+ }catch(e){toast("Trade not saved: "+e.message)}
+}
+async function loadTrades(){
+ const box=$("trades");if(!box)return;
+ try{
+  const r=await fetch("/api/trades",{cache:"no-store"}),rows=await r.json();if(!r.ok)throw new Error(rows.error||"Trade list unavailable");
+  box.innerHTML=rows.length?rows.map(t=>'<article class="trade-row"><div><b>'+esc(t.symbol)+' · '+esc(t.side)+'</b><small>Entry $'+fmt(t.entry)+' · Last $'+fmt(t.lastPrice||t.entry)+'</small><small>SL $'+fmt(t.stopLoss)+' · TP3 $'+fmt(t.tp3)+'</small></div><div class="trade-state"><span class="tag">'+esc(t.status)+'</span><button class="outline-btn close-trade" data-id="'+t.id+'">Close trade</button></div></article>').join(""):'<div class="empty">No open trades. Track a qualified signal to save it in Neon.</div>';
+  box.querySelectorAll(".close-trade").forEach(b=>b.addEventListener("click",async()=>{if(!confirm("Close this tracked trade?"))return;const z=await fetch("/api/trades/"+b.dataset.id+"/close",{method:"POST",headers:{"content-type":"application/json"},body:"{}"});if(z.ok){toast("Trade closed and retained in Neon history");loadTrades()}else toast("Could not close trade")}));
+ }catch(e){box.innerHTML='<div class="empty">Trade history unavailable: '+esc(e.message)+'</div>'}
+}
+const signalRefresh=$("signal-refresh");if(signalRefresh)signalRefresh.addEventListener("click",()=>loadSignals(true));
+loadSignals();loadTrades();setInterval(()=>{loadSignals();loadTrades()},60000);
