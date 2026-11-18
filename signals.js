@@ -41,14 +41,16 @@ function analyzeFrames(symbol, frames, book) {
   if(spread<=0.05)points.liquidity+=8;else if(spread<=0.1)points.liquidity+=5;
   if(imb>0.55){points.liquidity+=7;reasons.push("Order book bid imbalance");}
   const recentHigh=Math.max(...h.slice(-21,-1)),recentLow=Math.min(...l.slice(-21,-1));
-  if(price>recentHigh){points.structure+=15;reasons.push("15m bullish breakout");}
-  else if(price>recentLow && c15.at(-1)>c15.at(-2)){points.structure+=7;reasons.push("15m recovery structure");}
+  if(price>recentHigh){points.structure+=20;reasons.push("15m bullish breakout");}
+  else if(price>recentLow && c15.at(-1)>c15.at(-2)){points.structure+=10;reasons.push("15m recovery structure");}
   const score=Object.values(points).reduce((x,y)=>x+y,0);
   const stopBase=Math.min(...l.slice(-8))-0.25*a;
   let risk=price-stopBase,stop=stopBase;
   if(risk<0.8*a){risk=0.8*a;stop=price-risk;}
   const room=recentHigh>price?recentHigh-price:Infinity;
-  const rr=room===Infinity?3:room/risk;\n  points.rr=rr>=2.5?15:rr>=1.5?10:0;\n  const score=Object.values(points).reduce((x,y)=>x+y,0);
+  const rr=room===Infinity?3:room/risk;
+  points.rr=rr>=2.5?15:rr>=1.5?10:0;
+  const score=Object.values(points).reduce((x,y)=>x+y,0);
   const blocked=[];
   if(points.trend<15)blocked.push("4h/1h trend alignment missing");
   if(rvol<0.7)blocked.push("Volume too weak");
