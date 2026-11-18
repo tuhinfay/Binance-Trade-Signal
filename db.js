@@ -1,7 +1,7 @@
 const { Pool } = require("pg");
 
 const pool = process.env.DATABASE_URL ? new Pool({
-  connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false },
+  connectionString: (() => { const url = new URL(process.env.DATABASE_URL); url.searchParams.set("sslmode", "verify-full"); return url.toString(); })(),
   max: 3, idleTimeoutMillis: 30000, connectionTimeoutMillis: 8000
 }) : null;
 let state = pool ? "connecting" : "not_configured";
