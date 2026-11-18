@@ -1,174 +1,130 @@
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
-const { initDatabase, databaseStatus, saveSnapshots, readHistory } = require("./db");
+const { initDatabase, databaseStatus, saveSnapshots, readHistory, saveSignal, readSignals, createTrade, listTrades, recordTradeEvent, updateTrade, closeTrade, getTradeEvents } = require("./db");
+const { analyzeSymbol } = require("./signals");
 
-const PORT = Number(process.env.PORT || 10000);
-const ROOT = path.join(__dirname, "public");
-const MARKET_TTL_MS = Math.max(30000, Number(process.env.SCAN_INTERVAL_MS || 60000));
-const SESSION_TTL_MS = 5 * 60 * 1000;
-const HOSTS = ["https://api.binance.com","https://api1.binance.com","https://api2.binance.com","https://api3.binance.com","https://api4.binance.com","https://data-api.binance.vision"];
-const hostCooldown = new Map();
-const pairCache = new Map();
-const pairInFlight = new Map();
-let marketCache = { at: 0, data: null };
-let marketInFlight = null;
-let lastSnapshotAt = 0;
-const mime = { ".html":"text/html; charset=utf-8", ".css":"text/css; charset=utf-8", ".js":"text/javascript; charset=utf-8", ".json":"application/json; charset=utf-8", ".svg":"image/svg+xml" };
+const PORT=Number(process.env.PORT||10000), ROOT=path.join(__dirname,"public");
+const MARKET_TTL_MS=Math.max(30000,Number(process.env.SCAN_INTERVAL_MS||60000));
+const SIGNAL_SCAN_MS=Math.max(120000,Number(process.env.SIGNAL_SCAN_MS||180000));
+const MONITOR_MS=Math.max(10000,Number(process.env.TRADE_MONITOR_MS||15000));
+const HOSTS=["https://api.binance.com","https://api1.binance.com","https://api2.binance.com","https://api3.binance.com","https://api4.binance.com","https://data-api.binance.vision"];
+const hostCooldown=new Map(),pairCache=new Map();
+let marketCache={at:0,data:null},marketInFlight=null,lastSnapshotAt=0,lastSignalScanAt=0,signalCache=[],signalScanInFlight=null,monitorInFlight=null;
+const CORE=["BTCUSDT","ETHUSDT","BNBUSDT","XRPUSDT","SOLUSDT"];
+const mime={".html":"text/html; charset=utf-8",".css":"text/css; charset=utf-8",".js":"text/javascript; charset=utf-8",".json":"application/json; charset=utf-8",".svg":"image/svg+xml"};
 
-function sendJson(res, status, body) {
-  res.writeHead(status, {"content-type":"application/json; charset=utf-8","cache-control":"no-store","x-content-type-options":"nosniff"});
-  res.end(JSON.stringify(body));
-}
-
-async function binance(apiPath) {
-  const failures = [];
-  const now = Date.now();
-  const availableHosts = HOSTS.filter(host => (hostCooldown.get(host) || 0) <= now);
-  for (const host of [...availableHosts, ...HOSTS.filter(host => !availableHosts.includes(host))]) {
-    const blockedUntil = hostCooldown.get(host) || 0;
-    if (blockedUntil > Date.now()) {
-      failures.push(host.replace("https://", "") + ": cooling down");
-      continue;
-    }
-    try {
-      const response = await fetch(host + apiPath, {
-        headers: {"User-Agent":"Binance-Trade-Signal/2.0","Accept":"application/json"},
-        signal: AbortSignal.timeout(9000)
-      });
-      if (response.status === 418 || response.status === 429) {
-        const retryAfter = Number(response.headers.get("retry-after") || 0);
-        const cooldownMs = Math.max(60000, Math.min(15 * 60 * 1000, retryAfter * 1000 || 60000));
-        hostCooldown.set(host, Date.now() + cooldownMs);
-        failures.push(host.replace("https://", "") + ": HTTP " + response.status + " (cooldown " + Math.round(cooldownMs / 1000) + "s)");
-        continue;
-      }
-      if (!response.ok) {
-        failures.push(host.replace("https://", "") + ": HTTP " + response.status);
-        continue;
-      }
-      return await response.json();
-    } catch (error) {
-      failures.push(host.replace("https://", "") + ": " + error.message);
-    }
+function sendJson(res,status,body){res.writeHead(status,{"content-type":"application/json; charset=utf-8","cache-control":"no-store","x-content-type-options":"nosniff"});res.end(JSON.stringify(body));}
+async function binance(apiPath){
+  const failures=[],now=Date.now(),available=HOSTS.filter(h=>(hostCooldown.get(h)||0)<=now);
+  for(const host of [...available,...HOSTS.filter(h=>!available.includes(h))]){
+    if((hostCooldown.get(host)||0)>Date.now())continue;
+    try{
+      const r=await fetch(host+apiPath,{headers:{"User-Agent":"Binance-Trade-Signal/3.0","Accept":"application/json"},signal:AbortSignal.timeout(10000)});
+      if(r.status===418||r.status===429){const sec=Number(r.headers.get("retry-after")||60);hostCooldown.set(host,Date.now()+Math.max(60000,Math.min(900000,sec*1000)));failures.push(host+": HTTP "+r.status);continue;}
+      if(!r.ok){failures.push(host+": HTTP "+r.status);continue;}return await r.json();
+    }catch(e){failures.push(host+": "+e.message);}
   }
-  throw new Error("All Binance endpoints are unavailable. " + failures.join(" | "));
+  throw new Error("Binance endpoints unavailable: "+failures.join(" | "));
 }
-
-async function getOne(symbol, tickerHint) {
-  const ticker = tickerHint || await binance("/api/v3/ticker/24hr?symbol=" + encodeURIComponent(symbol));
-  let sessionChange = Number(ticker.priceChangePercent);
-  let open = Number(ticker.openPrice);
-  const cachedSession = pairCache.get(symbol);
-  if (cachedSession && Date.now() - cachedSession.at < SESSION_TTL_MS) {
-    open = cachedSession.open;
-  } else {
-    try {
-      const candles = await binance("/api/v3/klines?symbol=" + encodeURIComponent(symbol) + "&interval=1d&timeZone=6&limit=1");
-      if (Array.isArray(candles) && candles.length) {
-        open = Number(candles[0][1]);
-        pairCache.set(symbol, {at:Date.now(),open});
-      }
-    } catch (error) {
-      console.warn("[session-candle]", symbol, error.message);
-    }
-  }
-  const last = Number(ticker.lastPrice);
-  if (open > 0) sessionChange = (last - open) / open * 100;
-  return {
-    symbol: ticker.symbol, price: last, change24h: Number(ticker.priceChangePercent),
-    sessionChange, quoteVolume: Number(ticker.quoteVolume), high: Number(ticker.highPrice),
-    low: Number(ticker.lowPrice), open, trades: Number(ticker.count)
-  };
+async function getOne(symbol,hint){
+  const t=hint||await binance("/api/v3/ticker/24hr?symbol="+encodeURIComponent(symbol));
+  let open=Number(t.openPrice),sessionChange=Number(t.priceChangePercent);
+  const cached=pairCache.get(symbol);
+  if(cached&&Date.now()-cached.at<300000)open=cached.open;
+  else try{const k=await binance("/api/v3/klines?symbol="+encodeURIComponent(symbol)+"&interval=1d&timeZone=6&limit=1");if(k.length){open=Number(k[0][1]);pairCache.set(symbol,{at:Date.now(),open});}}catch(e){console.warn("[session]",symbol,e.message);}
+  const price=Number(t.lastPrice);if(open>0)sessionChange=(price-open)/open*100;
+  return {symbol:t.symbol,price,change24h:Number(t.priceChangePercent),sessionChange,quoteVolume:Number(t.quoteVolume),high:Number(t.highPrice),low:Number(t.lowPrice),open,trades:Number(t.count)};
 }
-async function getMarket() {
-  if (marketCache.data && Date.now() - marketCache.at < MARKET_TTL_MS) return marketCache.data;
-  if (marketInFlight) return marketInFlight;
-  marketInFlight = (async () => {
-    const tickers = await binance("/api/v3/ticker/24hr");
-    if (!Array.isArray(tickers)) throw new Error("Unexpected response from Binance ticker endpoint");
-    const liquid = tickers
-      .filter(item => item.symbol.endsWith("USDT") && !/(UP|DOWN|BULL|BEAR)USDT$/.test(item.symbol) && Number(item.quoteVolume) > 1000000)
-      .sort((a,b) => Number(b.quoteVolume)-Number(a.quoteVolume)).slice(0,35);
-    let cursor = 0;
-    const rows = new Array(liquid.length);
-    async function worker() {
-      while (cursor < liquid.length) {
-        const index = cursor++;
-        const ticker = liquid[index];
-        try {
-          rows[index] = await getOne(ticker.symbol,ticker);
-        } catch (error) {
-          rows[index] = {
-            symbol:ticker.symbol,price:Number(ticker.lastPrice),change24h:Number(ticker.priceChangePercent),
-            sessionChange:Number(ticker.priceChangePercent),quoteVolume:Number(ticker.quoteVolume),
-            high:Number(ticker.highPrice),low:Number(ticker.lowPrice),open:Number(ticker.openPrice),
-            trades:Number(ticker.count),fallback:true
-          };
-        }
-      }
-    }
+async function getMarket(){
+  if(marketCache.data&&Date.now()-marketCache.at<MARKET_TTL_MS)return marketCache.data;
+  if(marketInFlight)return marketInFlight;
+  marketInFlight=(async()=>{
+    const ticks=await binance("/api/v3/ticker/24hr");
+    const liquid=ticks.filter(x=>x.symbol.endsWith("USDT")&&!/(UP|DOWN|BULL|BEAR)USDT$/.test(x.symbol)&&Number(x.quoteVolume)>1000000).sort((a,b)=>Number(b.quoteVolume)-Number(a.quoteVolume)).slice(0,35);
+    let cursor=0;const rows=new Array(liquid.length);
+    async function worker(){while(cursor<liquid.length){const i=cursor++,t=liquid[i];try{rows[i]=await getOne(t.symbol,t);}catch(e){rows[i]={symbol:t.symbol,price:Number(t.lastPrice),change24h:Number(t.priceChangePercent),sessionChange:Number(t.priceChangePercent),quoteVolume:Number(t.quoteVolume),high:Number(t.highPrice),low:Number(t.lowPrice),open:Number(t.openPrice),fallback:true};}}}
     await Promise.all(Array.from({length:3},worker));
-    const data = {updatedAt:new Date().toISOString(),timezone:"Asia/Dhaka",sessionReset:"06:00",markets:rows.filter(Boolean)};
-    if (!data.markets.length) throw new Error("Binance returned no USDT spot markets");
-    marketCache = {at:Date.now(),data};
-    if (Date.now() - lastSnapshotAt >= 5 * 60 * 1000) {
-      lastSnapshotAt = Date.now();
-      saveSnapshots(data.markets).catch(error => console.error("[database-snapshot]",error.message));
-    }
+    const data={updatedAt:new Date().toISOString(),timezone:"Asia/Dhaka",sessionReset:"06:00",markets:rows.filter(Boolean)};
+    if(!data.markets.length)throw new Error("No USDT spot markets returned");
+    marketCache={at:Date.now(),data};
+    if(Date.now()-lastSnapshotAt>=5*60*1000){lastSnapshotAt=Date.now();saveSnapshots(data.markets).catch(e=>console.error("[snapshot]",e.message));}
     return data;
-  })().finally(() => { marketInFlight = null; });
+  })().finally(()=>marketInFlight=null);
   return marketInFlight;
 }
-
-const server = http.createServer(async (req,res) => {
-  const url = new URL(req.url,"http://localhost");
-  if (url.pathname === "/health") return sendJson(res,200,{ok:true,database:databaseStatus()});
-  if (url.pathname === "/api/market") {
-    try { return sendJson(res,200,await getMarket()); }
-    catch (error) {
-      console.error("[market-api]",error.message);
-      return sendJson(res,502,{error:"Unable to load Binance market data",detail:error.message});
+async function scanSignals(force=false){
+  if(!force&&signalCache.length&&Date.now()-lastSignalScanAt<SIGNAL_SCAN_MS)return signalCache;
+  if(signalScanInFlight)return signalScanInFlight;
+  signalScanInFlight=(async()=>{
+    const market=await getMarket(),liquid=market.markets.slice().sort((a,b)=>b.quoteVolume-a.quoteVolume).slice(0,7).map(x=>x.symbol);
+    const symbols=[...new Set([...CORE,...liquid])];let cursor=0;const out=new Array(symbols.length);
+    async function worker(){while(cursor<symbols.length){const i=cursor++,symbol=symbols[i];try{out[i]=await analyzeSymbol(symbol,binance);await saveSignal(out[i]);}catch(e){console.warn("[signal]",symbol,e.message);}}}
+    await Promise.all(Array.from({length:2},worker));
+    signalCache=out.filter(Boolean).sort((a,b)=>b.score-a.score);lastSignalScanAt=Date.now();
+    return signalCache;
+  })().finally(()=>signalScanInFlight=null);
+  return signalScanInFlight;
+}
+const n=x=>Number(x||0);
+function tradeJson(t){return {id:n(t.id),symbol:t.symbol,side:t.side,market:t.market,entry:n(t.entry),quantity:n(t.quantity),leverage:n(t.leverage),stopLoss:n(t.stop_loss),initialStop:n(t.initial_stop),tp1:n(t.take_profit_1),tp2:n(t.take_profit_2),tp3:n(t.take_profit_3),trailDistance:n(t.trail_distance),status:t.status,tp1Hit:t.tp1_hit,tp2Hit:t.tp2_hit,lastPrice:t.last_price==null?null:n(t.last_price),closePrice:t.close_price==null?null:n(t.close_price),closeReason:t.close_reason,openedAt:t.opened_at,closedAt:t.closed_at,notes:t.notes};}
+async function monitorTrades(){
+  if(monitorInFlight)return monitorInFlight;
+  monitorInFlight=(async()=>{
+    const rows=await listTrades(false);
+    for(const raw of rows){
+      const t={...raw,id:n(raw.id),entry:n(raw.entry),stop_loss:n(raw.stop_loss),initial_stop:n(raw.initial_stop),tp1:n(raw.take_profit_1),tp2:n(raw.take_profit_2),tp3:n(raw.take_profit_3),trail_distance:n(raw.trail_distance),tp1_hit:raw.tp1_hit,tp2_hit:raw.tp2_hit};
+      try{
+        const p=await binance("/api/v3/ticker/price?symbol="+encodeURIComponent(t.symbol)),price=Number(p.price);
+        const s=t.side==="LONG"?1:-1;
+        if((price-t.stop_loss)*s<=0){await closeTrade(t.id,price,"STOP_LOSS");continue;}
+        if(t.tp1&&!t.tp1_hit&&(price-t.tp1)*s>=0){t.tp1_hit=true;const old=t.stop_loss;t.stop_loss=t.entry;await recordTradeEvent(t.id,"TP1_HIT",price,{oldStop:old,newStop:t.stop_loss});}
+        if(t.tp2&&!t.tp2_hit&&(price-t.tp2)*s>=0){t.tp2_hit=true;const old=t.stop_loss;t.stop_loss=t.tp1||t.entry;await recordTradeEvent(t.id,"TP2_HIT",price,{oldStop:old,newStop:t.stop_loss});}
+        if(t.tp3&&(price-t.tp3)*s>=0){await closeTrade(t.id,price,"TAKE_PROFIT_3");continue;}
+        if(t.trail_distance>0&&Math.abs(price-t.entry)>=Math.abs(t.initial_stop-t.entry)){
+          const candidate=price-s*t.trail_distance;
+          if((candidate-t.stop_loss)*s>0){t.stop_loss=candidate;await recordTradeEvent(t.id,"TRAILING_STOP",price,{newStop:candidate});}
+        }
+        t.last_price=price;
+        await updateTrade(t);
+      }catch(e){console.warn("[trade-monitor]",t.symbol,e.message);}
     }
+  })().finally(()=>monitorInFlight=null);
+  return monitorInFlight;
+}
+async function serveStatic(req,res,url){
+  const pathname=decodeURIComponent(url.pathname==="/" ? "/index.html":url.pathname),file=path.normalize(path.join(ROOT,pathname));
+  if(!file.startsWith(ROOT+path.sep)&&file!==path.join(ROOT,"index.html")){res.writeHead(403);return res.end("Forbidden");}
+  fs.readFile(file,(e,b)=>{if(e){res.writeHead(404);return res.end("Not found");}res.writeHead(200,{"content-type":mime[path.extname(file)]||"application/octet-stream","x-content-type-options":"nosniff"});res.end(b);});
+}
+const server=http.createServer(async(req,res)=>{
+  const url=new URL(req.url,"http://localhost");
+  if(url.pathname==="/health")return sendJson(res,200,{ok:true,database:databaseStatus(),signalEngine:true,tradeMonitor:true});
+  if(url.pathname==="/api/market"){try{return sendJson(res,200,await getMarket());}catch(e){return sendJson(res,502,{error:"Unable to load Binance market data",detail:e.message});}}
+  if(url.pathname==="/api/signals"){try{await monitorTrades();return sendJson(res,200,{updatedAt:new Date(lastSignalScanAt||Date.now()).toISOString(),signals:await scanSignals(url.searchParams.get("refresh")==="1")});}catch(e){return sendJson(res,502,{error:"Signal scan unavailable",detail:e.message});}}
+  if(url.pathname==="/api/trades"&&req.method==="GET"){try{return sendJson(res,200,(await listTrades(url.searchParams.get("history")==="1")).map(tradeJson));}catch(e){return sendJson(res,503,{error:e.message});}}
+  if(url.pathname==="/api/trades"&&req.method==="POST"){
+    try{let body="";for await(const chunk of req)body+=chunk;const x=JSON.parse(body||"{}");const symbol=String(x.symbol||"").toUpperCase(),side=String(x.side||"").toUpperCase();
+      if(!/^[A-Z0-9]{2,20}USDT$/.test(symbol)||side!=="LONG")return sendJson(res,400,{error:"Spot tracking currently supports valid USDT pairs and LONG only"});
+      const entry=n(x.entry),stop=n(x.stop),tp1=n(x.tp1),tp2=n(x.tp2),tp3=n(x.tp3);
+      if(!(entry>0&&stop>0&&stop<entry&&tp1>entry&&tp2>tp1&&tp3>tp2))return sendJson(res,400,{error:"Invalid LONG trade plan: require stop < entry < TP1 < TP2 < TP3"});
+      const saved=await createTrade({symbol,side,market:"spot",entry,stop,tp1,tp2,tp3,quantity:n(x.quantity),leverage:1,trailDistance:n(x.trailDistance),notes:String(x.notes||"")});
+      return sendJson(res,201,{trade:tradeJson(saved)});
+    }catch(e){return sendJson(res,503,{error:"Trade could not be saved to Neon",detail:e.message});}
   }
-  if (url.pathname === "/api/pair") {
-    const symbol = (url.searchParams.get("symbol") || "").toUpperCase();
-    if (!/^[A-Z0-9]{2,20}USDT$/.test(symbol)) return sendJson(res,400,{error:"Only valid USDT spot pairs are supported"});
-    try { return sendJson(res,200,await getOne(symbol)); }
-    catch (error) {
-      console.error("[pair-api]",symbol,error.message);
-      return sendJson(res,404,{error:"Pair not found or unavailable on Binance Spot",detail:error.message});
-    }
-  }
-  if (url.pathname === "/api/history") {
-    const symbol = (url.searchParams.get("symbol") || "").toUpperCase();
-    if (!/^[A-Z0-9]{2,20}USDT$/.test(symbol)) return sendJson(res,400,{error:"Provide a valid USDT pair symbol"});
-    try { return sendJson(res,200,{symbol,history:await readHistory(symbol)}); }
-    catch (error) {
-      console.error("[history-api]",error.message);
-      return sendJson(res,503,{error:"Market history is temporarily unavailable"});
-    }
-  }
-  const pathname = decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname);
-  const file = path.normalize(path.join(ROOT,pathname));
-  if (!file.startsWith(ROOT + path.sep) && file !== path.join(ROOT,"index.html")) {
-    res.writeHead(403); return res.end("Forbidden");
-  }
-  fs.readFile(file,(error,body) => {
-    if (error) { res.writeHead(404); return res.end("Not found"); }
-    res.writeHead(200,{"content-type":mime[path.extname(file)] || "application/octet-stream","x-content-type-options":"nosniff"});
-    res.end(body);
-  });
+  const closeMatch=url.pathname.match(/^\/api\/trades\/(\d+)\/close$/);
+  if(closeMatch&&req.method==="POST"){try{const id=Number(closeMatch[1]);let body="";for await(const c of req)body+=c;const x=JSON.parse(body||"{}");const done=await closeTrade(id,n(x.price)||null,"MANUAL_CLOSE");return sendJson(res,200,{ok:done});}catch(e){return sendJson(res,503,{error:e.message});}}
+  const eventMatch=url.pathname.match(/^\/api\/trades\/(\d+)\/events$/);
+  if(eventMatch&&req.method==="GET"){try{return sendJson(res,200,await getTradeEvents(Number(eventMatch[1])));}catch(e){return sendJson(res,503,{error:e.message});}}
+  if(url.pathname==="/api/pair"){const symbol=(url.searchParams.get("symbol")||"").toUpperCase();if(!/^[A-Z0-9]{2,20}USDT$/.test(symbol))return sendJson(res,400,{error:"Only valid USDT spot pairs are supported"});try{return sendJson(res,200,await getOne(symbol));}catch(e){return sendJson(res,404,{error:"Pair unavailable",detail:e.message});}}
+  if(url.pathname==="/api/history"){const symbol=(url.searchParams.get("symbol")||"").toUpperCase();if(!/^[A-Z0-9]{2,20}USDT$/.test(symbol))return sendJson(res,400,{error:"Provide a valid USDT pair"});try{return sendJson(res,200,{symbol,history:await readHistory(symbol)});}catch(e){return sendJson(res,503,{error:e.message});}}
+  return serveStatic(req,res,url);
 });
-
-server.listen(PORT,"0.0.0.0",async () => {
-  console.log("Binance Trade Signal listening on " + PORT);
-  try {
-    await initDatabase();
-    console.log("[database] Neon PostgreSQL connected and schema ready");
-  } catch (error) {
-    console.error("[database] Neon connection unavailable:",error.message);
-  }
+server.listen(PORT,"0.0.0.0",async()=>{
+  console.log("Binance Trade Signal listening on "+PORT);
+  try{await initDatabase();console.log("[database] Neon schema ready");await monitorTrades();scanSignals().catch(e=>console.warn("[startup-scan]",e.message));}
+  catch(e){console.error("[database] Neon unavailable:",e.message);}
+  setInterval(()=>scanSignals().catch(e=>console.warn("[signal-scan]",e.message)),SIGNAL_SCAN_MS);
+  setInterval(()=>monitorTrades().catch(e=>console.warn("[trade-monitor]",e.message)),MONITOR_MS);
 });
-
-process.on("SIGTERM",() => server.close(() => process.exit(0)));
+process.on("SIGTERM",()=>server.close(()=>process.exit(0)));
