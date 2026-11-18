@@ -22,7 +22,9 @@ async function initDatabase() {
     opened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     closed_at TIMESTAMPTZ, notes TEXT NOT NULL DEFAULT ''
   )`);
+  await pool.query("ALTER TABLE tracked_trades ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMPTZ");
   await pool.query("CREATE INDEX IF NOT EXISTS tracked_trades_open_idx ON tracked_trades (status, opened_at DESC) WHERE closed_at IS NULL");
+  await pool.query(`CREATE TABLE IF NOT EXISTS latest_signals (symbol VARCHAR(24) PRIMARY KEY, side VARCHAR(12) NOT NULL, score INTEGER NOT NULL, grade VARCHAR(24), plan JSONB, payload JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
   await pool.query(`CREATE TABLE IF NOT EXISTS trade_events (
     id BIGSERIAL PRIMARY KEY, trade_id BIGINT NOT NULL REFERENCES tracked_trades(id),
     event_type VARCHAR(32) NOT NULL, price NUMERIC(28,12), details JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -86,7 +88,7 @@ async function recordTradeEvent(id,type,price,details={}) {
   await pool.query("INSERT INTO trade_events(trade_id,event_type,price,details) VALUES($1,$2,$3,$4::jsonb)",[id,type,price,JSON.stringify(details)]);
 }
 async function updateTrade(t) {
-  await pool.query(`UPDATE tracked_trades SET stop_loss=$2,last_price=$3,tp1_hit=$4,tp2_hit=$5,status=$6,updated_at=NOW() WHERE id=$1 AND closed_at IS NULL`,
+  await pool.query(`UPDATE tracked_trades SET stop_loss=$2,last_price=$3,tp1_hit=$4,tp2_hit=$5,status=$6,last_checked_at=NOW(),updated_at=NOW() WHERE id=$1 AND closed_at IS NULL`,
     [t.id,t.stop_loss,t.last_price,t.tp1_hit,t.tp2_hit,t.status]);
 }
 async function closeTrade(id,price,reason) {
