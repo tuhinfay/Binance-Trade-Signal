@@ -60,8 +60,25 @@ function analyzeFrames(symbol, frames, book) {
   if(risk>3*a)blocked.push("Stop distance exceeds 3 ATR");
   if(rr<1.5)blocked.push("Insufficient room to resistance");
   const side=blocked.length||score<75?"NO TRADE":"LONG";
+  const setupStatus=side==="LONG"?"READY":score>=55?"WATCH":"NO TRADE";
+  const timeframeStatus={
+    "4H":price>e200_4&&e50_4>e200_4?"BULLISH":price<e200_4&&e50_4<e200_4?"BEARISH":"MIXED",
+    "1H":c1.at(-1)>e50_1&&e20_1>e50_1?"BULLISH":c1.at(-1)<e50_1&&e20_1<e50_1?"BEARISH":"MIXED",
+    "15M":c15.at(-1)>ema(c15,20).at(-1)&&c15.at(-1)>c15.at(-2)?"RECOVERY":"WEAK",
+    "5M":e9_5>e20_5&&c5.at(-1)>c5.at(-2)?"ENTRY MOMENTUM":"WAIT"
+  };
+  const nextConditions=blocked.map(x=>({
+    "4h/1h trend alignment missing":"Wait for 4H and 1H trend alignment",
+    "5m entry momentum not confirmed":"Wait for 5m EMA9 above EMA20 and rising close",
+    "RSI overbought":"Wait for RSI to cool below 75",
+    "RSI momentum too weak":"Wait for RSI to recover above 45",
+    "Volume too weak":"Wait for relative volume to rise above 0.7x",
+    "Spread too wide":"Wait for spread to tighten below 0.15%",
+    "Stop distance exceeds 3 ATR":"Wait for a tighter swing-low stop structure",
+    "Insufficient room to resistance":"Wait for a cleaner breakout or better reward/risk"
+  }[x]||x));
   const plan=side==="LONG"?{entry:price,entry_zone:[price-0.1*a,price+0.1*a],stop,tp1:price+risk*1.5,tp2:price+risk*2.5,tp3:price+risk*4,rr:[1.5,2.5,4],atr:a,trail_dist:1.2*a}:null;
-  return {symbol,market:"spot",timestamp:Date.now(),price,side,grade:score>=85?"STRONG":score>=75?"GOOD":"WAIT",score,breakdown:points,reasons,blocked,plan,metrics:{rsi:+r.toFixed(1),atr_pct:+(a/price*100).toFixed(3),rvol:+rvol.toFixed(2),spread_pct:+spread.toFixed(4),book_imbalance:+imb.toFixed(3),taker_buy_ratio:taker===null?null:+taker.toFixed(3)},timeframes:{trend:"4h + 1h",setup:"15m",entry:"5m"},dataQuality:{closedCandlesOnly:true,takerFlowAvailable:taker!==null,bookDepthLevels:20},disclaimer:"Confluence score is not a win probability. Confirm risk before entering."};
+  return {symbol,market:"spot",timestamp:Date.now(),price,side,grade:score>=85?"STRONG":score>=75?"GOOD":score>=55?"WATCH":"WAIT",setupStatus,score,breakdown:points,reasons,blocked,nextConditions,timeframes:timeframeStatus,plan,metrics:{rsi:+r.toFixed(1),atr_pct:+(a/price*100).toFixed(3),rvol:+rvol.toFixed(2),spread_pct:+spread.toFixed(4),book_imbalance:+imb.toFixed(3),taker_buy_ratio:taker===null?null:+taker.toFixed(3)},timeframes:{trend:"4h + 1h",setup:"15m",entry:"5m"},dataQuality:{closedCandlesOnly:true,takerFlowAvailable:taker!==null,bookDepthLevels:20},disclaimer:"Confluence score is not a win probability. Confirm risk before entering."};
 }
 async function analyzeSymbol(symbol, getJson) {
   const intervals=["4h","1h","15m","5m"];
