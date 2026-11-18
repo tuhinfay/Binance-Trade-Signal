@@ -37,11 +37,13 @@ async function loadSignals(force=false){
   box.innerHTML=rows.length?rows.map(x=>{
    const ready=x.side==="LONG"&&x.plan;
    const blockers=x.blocked||[];
+   const maxima={trend:20,momentum:15,volume:15,liquidity:15,structure:20,rr:15};
+   const breakdown=Object.entries(x.breakdown||{}).map(([key,value])=>{const max=maxima[key]||20;return '<div class="score-part"><span>'+esc(key)+'</span><b>'+Number(value)+'/'+max+'</b><i><em style="width:'+Math.max(0,Math.min(100,Number(value)/max*100))+'%"></em></i></div>'}).join("");
    const details=ready
     ? '<div class="signal-levels"><span>Entry <b>$'+fmt(x.plan.entry)+'</b></span><span>Stop <b class="negative">$'+fmt(x.plan.stop)+'</b></span><span>TP1 <b class="positive">$'+fmt(x.plan.tp1)+'</b></span><span>TP2 <b class="positive">$'+fmt(x.plan.tp2)+'</b></span><span>TP3 <b class="positive">$'+fmt(x.plan.tp3)+'</b></span></div><button class="primary-btn track-signal" data-symbol="'+esc(x.symbol)+'">Track this trade</button>'
     : '<div class="signal-levels"><span>RSI <b>'+fmt(x.metrics?.rsi??0)+'</b></span><span>Rel. volume <b>'+fmt(x.metrics?.rvol??0)+'x</b></span><span>ATR <b>'+fmt(x.metrics?.atr_pct??0)+'%</b></span><span>Spread <b>'+fmt(x.metrics?.spread_pct??0)+'%</b></span><span>Bid depth <b>'+fmt((x.metrics?.book_imbalance??0)*100)+'%</b></span><span>Taker flow <b>'+(x.metrics?.taker_buy_ratio==null?'N/A':fmt(x.metrics.taker_buy_ratio*100)+'%')+'</b></span></div>';
    const reason=ready?'Qualified LONG setup':('WAIT · '+(blockers.length?blockers.join(' · '):'Confluence threshold not met'));
-   return '<article class="signal-card"><div class="signal-top"><div><b>'+esc(x.symbol)+'</b><span class="signal-grade">'+esc(x.grade|| (ready?'SETUP':'WAIT'))+'</span></div><strong>'+Number(x.score||0)+'/100</strong></div><p class="signal-reasons">'+esc(reason)+'</p><small class="signal-source">Source: '+esc(x.source||d.source||"exchange")+' · Closed candles</small>'+details+'</article>';
+   return '<article class="signal-card"><div class="signal-top"><div><b>'+esc(x.symbol)+'</b><span class="signal-grade">'+esc(x.grade|| (ready?'SETUP':'WAIT'))+'</span></div><strong>'+Number(x.score||0)+'/100</strong></div><div class="score-breakdown">'+breakdown+'</div><p class="signal-reasons">'+esc(reason)+'</p><small class="signal-source">Source: '+esc(x.source||d.source||"exchange")+' · Closed candles</small>'+details+'</article>';
   }).join(''):'<div class="empty">No scan data returned yet. Press Scan now to retry.</div>';
   box.querySelectorAll(".track-signal").forEach(b=>b.addEventListener("click",()=>trackSignal(b.dataset.symbol,rows)));
  }catch(e){box.innerHTML='<div class="empty">Signal engine unavailable: '+esc(e.message)+'</div>'}
