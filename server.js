@@ -40,7 +40,7 @@ async function bybitRequest(apiPath){
     endpoint="/v5/market/tickers";if(symbol)params.set("symbol",symbol);
     const r=await fetch(BYBIT_HOST+endpoint+"?"+params,{headers:{"Accept":"application/json"},signal:AbortSignal.timeout(10000)});
     if(!r.ok)throw new Error("Bybit HTTP "+r.status);const j=await r.json();if(j.retCode!==0){if([10006,10018].includes(j.retCode))bybitCooldownUntil=Date.now()+60000;throw new Error("Bybit "+j.retCode+": "+j.retMsg);}
-    return (j.result.list||[]).map(t=>({symbol:t.symbol,lastPrice:t.lastPrice,openPrice:t.prevPrice24h,priceChangePercent:String(Number(t.price24hPcnt)*100),highPrice:t.highPrice24h,lowPrice:t.lowPrice24h,quoteVolume:t.turnover24h,count:0}));
+    const rows=(j.result.list||[]).map(t=>({symbol:t.symbol,lastPrice:t.lastPrice,openPrice:t.prevPrice24h,priceChangePercent:String(Number(t.price24hPcnt)*100),highPrice:t.highPrice24h,lowPrice:t.lowPrice24h,quoteVolume:t.turnover24h,count:0}));return symbol?rows[0]:rows;
   }
   if(u.pathname.endsWith("/klines")){
     endpoint="/v5/market/kline";params.set("symbol",symbol);const iv=p.get("interval");params.set("interval",intervalMap[iv]||iv);params.set("limit",p.get("limit")||"200");
