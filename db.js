@@ -87,10 +87,7 @@ async function listTrades(history=false) {
 async function recordTradeEvent(id,type,price,details={}) {
   await pool.query("INSERT INTO trade_events(trade_id,event_type,price,details) VALUES($1,$2,$3,$4::jsonb)",[id,type,price,JSON.stringify(details)]);
 }
-async function updateTrade(t) {
-  await pool.query(`UPDATE tracked_trades SET stop_loss=$2,last_price=$3,tp1_hit=$4,tp2_hit=$5,status=$6,last_checked_at=NOW(),updated_at=NOW() WHERE id=$1 AND closed_at IS NULL`,
-    [t.id,t.stop_loss,t.last_price,t.tp1_hit,t.tp2_hit,t.status]);
-}
+async function updateTrade(t) {\n  await pool.query(`UPDATE tracked_trades SET stop_loss=$2,last_price=$3,tp1_hit=$4,tp2_hit=$5,status=$6,last_checked_at=COALESCE($7,last_checked_at),updated_at=NOW() WHERE id=$1 AND closed_at IS NULL`,\n    [t.id,t.stop_loss,t.last_price,t.tp1_hit,t.tp2_hit,t.status,t.last_checked_at||null]);\n}
 async function closeTrade(id,price,reason) {
   const r=await pool.query(`UPDATE tracked_trades SET status='CLOSED',close_price=$2,close_reason=$3,closed_at=NOW(),updated_at=NOW()
     WHERE id=$1 AND closed_at IS NULL RETURNING id`,[id,price,reason]);
