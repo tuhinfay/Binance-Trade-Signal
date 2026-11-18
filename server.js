@@ -55,37 +55,32 @@ async function binance(apiPath) {
   throw new Error("All Binance endpoints are unavailable. " + failures.join(" | "));
 }
 
-async function getOne(symbol) {
-  const cached = pairCache.get(symbol);
-  if (cached && Date.now() - cached.at < SESSION_TTL_MS) return cached.data;
-  if (pairInFlight.has(symbol)) return pairInFlight.get(symbol);
-  const task = (async () => {
-    const ticker = await binance("/api/v3/ticker/24hr?symbol=" + encodeURIComponent(symbol));
-    let sessionChange = Number(ticker.priceChangePercent);
-    let open = Number(ticker.openPrice);
+async function getOne(symbol, tickerHint) {
+  const ticker = tickerHint || await binance("/api/v3/ticker/24hr?symbol=" + encodeURIComponent(symbol));
+  let sessionChange = Number(ticker.priceChangePercent);
+  let open = Number(ticker.openPrice);
+  const cachedSession = pairCache.get(symbol);
+  if (cachedSession && Date.now() - cachedSession.at < SESSION_TTL_MS) {
+    open = cachedSession.open;
+  } else {
     try {
       const candles = await binance("/api/v3/klines?symbol=" + encodeURIComponent(symbol) + "&interval=1d&timeZone=6&limit=1");
       if (Array.isArray(candles) && candles.length) {
         open = Number(candles[0][1]);
-        const last = Number(ticker.lastPrice);
-        if (open > 0) sessionChange = (last - open) / open * 100;
+        pairCache.set(symbol, {at:Date.now(),open});
       }
     } catch (error) {
       console.warn("[session-candle]", symbol, error.message);
     }
-    const last = Number(ticker.lastPrice);
-    const data = {
-      symbol: ticker.symbol, price: last, change24h: Number(ticker.priceChangePercent),
-      sessionChange, quoteVolume: Number(ticker.quoteVolume), high: Number(ticker.highPrice),
-      low: Number(ticker.lowPrice), open, trades: Number(ticker.count)
-    };
-    pairCache.set(symbol, {at:Date.now(),data});
-    return data;
-  })().finally(() => pairInFlight.delete(symbol));
-  pairInFlight.set(symbol, task);
-  return task;
+  }
+  const last = Number(ticker.lastPrice);
+  if (open > 0) sessionChange = (last - open) / open * 100;
+  return {
+    symbol: ticker.symbol, price: last, change24h: Number(ticker.priceChangePercent),
+    sessionChange, quoteVolume: Number(ticker.quoteVolume), high: Number(ticker.highPrice),
+    low: Number(ticker.lowPrice), open, trades: Number(ticker.count)
+  };
 }
-
 async function getMarket() {
   if (marketCache.data && Date.now() - marketCache.at < MARKET_TTL_MS) return marketCache.data;
   if (marketInFlight) return marketInFlight;
@@ -102,7 +97,7 @@ async function getMarket() {
         const index = cursor++;
         const ticker = liquid[index];
         try {
-          rows[index] = await getOne(ticker.symbol);
+          rows[index] = await getOne(ticker.symbol,ticker);
         } catch (error) {
           rows[index] = {
             symbol:ticker.symbol,price:Number(ticker.lastPrice),change24h:Number(ticker.priceChangePercent),
