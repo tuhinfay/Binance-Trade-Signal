@@ -76,10 +76,10 @@ async function monitorTrades(){
       const t={...raw,id:n(raw.id),entry:n(raw.entry),stop_loss:n(raw.stop_loss),initial_stop:n(raw.initial_stop),tp1:n(raw.take_profit_1),tp2:n(raw.take_profit_2),tp3:n(raw.take_profit_3),trail_distance:n(raw.trail_distance),tp1_hit:raw.tp1_hit,tp2_hit:raw.tp2_hit,last_checked_at:raw.last_checked_at};
       const side=t.side==="LONG"?1:-1;
       async function applyPrice(price,high=price,low=price){
-        if((low-t.stop_loss)*side<=0){await closeTrade(t.id,t.stop_loss,"STOP_LOSS");return true;}
+        if((low-t.stop_loss)*side<=0){await closeTrade(t.id,t.stop_loss,"STOP_LOSS");t.status="CLOSED";return true;}
         if(t.tp1&&!t.tp1_hit&&(high-t.tp1)*side>=0){t.tp1_hit=true;t.status="TP1_HIT";const old=t.stop_loss;t.stop_loss=t.entry;await recordTradeEvent(t.id,"TP1_HIT",t.tp1,{oldStop:old,newStop:t.stop_loss});}
         if(t.tp2&&!t.tp2_hit&&(high-t.tp2)*side>=0){t.tp2_hit=true;t.status="TP2_HIT";const old=t.stop_loss;t.stop_loss=t.tp1||t.entry;await recordTradeEvent(t.id,"TP2_HIT",t.tp2,{oldStop:old,newStop:t.stop_loss});}
-        if(t.tp3&&(high-t.tp3)*side>=0){await closeTrade(t.id,t.tp3,"TAKE_PROFIT_3");return true;}
+        if(t.tp3&&(high-t.tp3)*side>=0){await closeTrade(t.id,t.tp3,"TAKE_PROFIT_3");t.status="CLOSED";return true;}
         if(t.trail_distance>0&&Math.abs(price-t.entry)>=Math.abs(t.initial_stop-t.entry)){
           const candidate=price-side*t.trail_distance;
           if((candidate-t.stop_loss)*side>0){t.stop_loss=candidate;await recordTradeEvent(t.id,"TRAILING_STOP",price,{newStop:candidate});}
