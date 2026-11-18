@@ -52,6 +52,9 @@ function analyzeFrames(symbol, frames, book) {
   const score=Object.values(points).reduce((x,y)=>x+y,0);
   const blocked=[];
   if(points.trend<15)blocked.push("4h/1h trend alignment missing");
+  if(e9_5<=e20_5||c5.at(-1)<=c5.at(-2))blocked.push("5m entry momentum not confirmed");
+  if(r>75)blocked.push("RSI overbought");
+  if(r<45)blocked.push("RSI momentum too weak");
   if(rvol<0.7)blocked.push("Volume too weak");
   if(spread>0.15)blocked.push("Spread too wide");
   if(risk>3*a)blocked.push("Stop distance exceeds 3 ATR");
