@@ -11,7 +11,8 @@ const MONITOR_MS=Math.max(10000,Number(process.env.TRADE_MONITOR_MS||15000));
 const HOSTS=["https://api.binance.com","https://api1.binance.com","https://api2.binance.com","https://api3.binance.com","https://api4.binance.com","https://data-api.binance.vision"];
 const hostCooldown=new Map(),pairCache=new Map();
 let marketCache={at:0,data:null},marketInFlight=null,lastSnapshotAt=0,lastSignalScanAt=0,signalCache=[],signalScanInFlight=null,monitorInFlight=null;
-const CORE=["BTCUSDT","ETHUSDT","BNBUSDT","XRPUSDT","SOLUSDT"];\nconst STABLE_BASES=new Set(["USDC","FDUSD","TUSD","USDP","DAI","BUSD","EUR","AEUR","USDE","XUSD","USD1"]);
+const CORE=["BTCUSDT","ETHUSDT","BNBUSDT","XRPUSDT","SOLUSDT"];
+const STABLE_BASES=new Set(["USDC","FDUSD","TUSD","USDP","DAI","BUSD","EUR","AEUR","USDE","XUSD","USD1"]);
 const mime={".html":"text/html; charset=utf-8",".css":"text/css; charset=utf-8",".js":"text/javascript; charset=utf-8",".json":"application/json; charset=utf-8",".svg":"image/svg+xml"};
 
 function sendJson(res,status,body){res.writeHead(status,{"content-type":"application/json; charset=utf-8","cache-control":"no-store","x-content-type-options":"nosniff"});res.end(JSON.stringify(body));}
