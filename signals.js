@@ -43,7 +43,6 @@ function analyzeFrames(symbol, frames, book) {
   const recentHigh=Math.max(...h.slice(-21,-1)),recentLow=Math.min(...l.slice(-21,-1));
   if(price>recentHigh){points.structure+=20;reasons.push("15m bullish breakout");}
   else if(price>recentLow && c15.at(-1)>c15.at(-2)){points.structure+=10;reasons.push("15m recovery structure");}
-  const score=Object.values(points).reduce((x,y)=>x+y,0);
   const stopBase=Math.min(...l.slice(-8))-0.25*a;
   let risk=price-stopBase,stop=stopBase;
   if(risk<0.8*a){risk=0.8*a;stop=price-risk;}
