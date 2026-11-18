@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#090d16"><meta name="description" content="Live Binance market scanner, Bangladesh session gainers and losers, and watchlist.">
+<title>Binance Trade Signal</title><link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="app-shell">
+<header class="topbar"><a class="brand" href="/"><span class="brand-mark">B</span><span>BINANCE <b>TRADE SIGNAL</b><small>MARKET INTELLIGENCE</small></span></a><div class="top-actions"><span class="live-pill"><i></i> LIVE MARKET</span><button id="refresh" class="icon-btn" title="Refresh market">↻</button><button id="notify" class="outline-btn">Enable alerts</button></div></header>
+<main>
+<section class="hero"><div><div class="eyebrow">BANGLADESH MARKET SESSION · UTC+6</div><h1>Market <span>Intelligence</span></h1><p>Live Binance spot market scanner, session performance and personal watchlist.</p></div><div class="session-card"><span>SESSION RESETS</span><strong>06:00 AM</strong><small>Asia / Dhaka</small></div></section>
+<section class="stats-grid"><article class="stat-card"><span>Markets scanned</span><strong id="count">—</strong><small>Liquid USDT pairs</small></article><article class="stat-card"><span>Top session gainer</span><strong id="top-gainer" class="positive">—</strong><small id="top-gainer-sub">Bangladesh session</small></article><article class="stat-card"><span>Top session loser</span><strong id="top-loser" class="negative">—</strong><small id="top-loser-sub">Bangladesh session</small></article><article class="stat-card"><span>Last market update</span><strong id="updated">—</strong><small id="connection">Connecting to Binance…</small></article></section>
+<section class="toolbar"><div class="tabs"><button class="tab active" data-tab="all">All markets</button><button class="tab" data-tab="gainers">Top gainers</button><button class="tab" data-tab="losers">Top losers</button><button class="tab" data-tab="watchlist">My watchlist</button></div><div class="search-wrap"><span>⌕</span><input id="search" placeholder="Search symbol e.g. BTCUSDT"></div></section>
+<section class="panel"><div class="panel-heading"><div><h2 id="table-title">Market overview</h2><p>Session change is calculated from the 06:00 Bangladesh-time daily candle open.</p></div><span class="muted" id="market-status">Loading…</span></div><div class="table-scroll"><table><thead><tr><th>#</th><th>PAIR</th><th>LAST PRICE</th><th>SESSION CHANGE</th><th>24H CHANGE</th><th>24H VOLUME</th><th>ADD</th></tr></thead><tbody id="markets"><tr><td colspan="7" class="empty">Loading live Binance markets…</td></tr></tbody></table></div></section>
+<section class="lower-grid"><article class="panel watch-panel"><div class="panel-heading"><div><h2>Priority watchlist</h2><p>BTC · ETH · XRP · BNB · SOL</p></div><span class="tag">CORE ASSETS</span></div><div id="priority" class="priority-list"><div class="empty">Waiting for market data…</div></div></article>
+<article class="panel add-panel"><div class="panel-heading"><div><h2>Track a market</h2><p>Add a Binance symbol or pair URL.</p></div></div><form id="add-form"><input id="custom-symbol" placeholder="e.g. LINKUSDT or BTC/USDT" autocomplete="off"><button class="primary-btn" type="submit">＋ Add pair</button></form><p class="hint">Public Spot market data only. No API key required.</p><div class="disclaimer"><b>Signal integrity</b><br>This first release is a market scanner, not an automated trading system. Price movement alone is not a validated LONG/SHORT signal. Confirm setups with your own analysis and risk controls.</div></article></section>
+<footer><span>Development by Tuhinfay</span><span>Market data: Binance public API · Not financial advice</span></footer>
+</main>
+</div><div id="toast" class="toast" role="status"></div><script src="/app.js"></script>
+</body></html>
