@@ -27,7 +27,7 @@ function analyzeFrames(symbol, frames, book) {
   const bids=(book.bids||[]).slice(0,20).reduce((z,x)=>z+Number(x[0])*Number(x[1]),0);
   const asks=(book.asks||[]).slice(0,20).reduce((z,x)=>z+Number(x[0])*Number(x[1]),0);
   const bid=Number(book.bids?.[0]?.[0]||price),ask=Number(book.asks?.[0]?.[0]||price),spread=(ask-bid)/((ask+bid)/2)*100,imb=bids/Math.max(bids+asks,1e-12);
-  const points={trend:0,momentum:0,volume:0,liquidity:0,structure:0};
+  const points={trend:0,momentum:0,volume:0,liquidity:0,structure:0,rr:0};
   const reasons=[];
   if(price>e200_4)points.trend+=10;
   if(e50_4>e200_4)points.trend+=5;
