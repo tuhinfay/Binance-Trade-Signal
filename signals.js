@@ -62,7 +62,7 @@ function analyzeFrames(symbol, frames, book) {
   const side=blocked.length||score<75?"NO TRADE":"LONG";
   const setupStatus=side==="LONG"?"READY":score>=55?"WATCH":"NO TRADE";
   const timeframeStatus={
-    "4H":price>e200_4&&e50_4>e200_4?"BULLISH":price<e200_4&&e50_4<e200_4?"BEARISH":"MIXED",
+    "4H":c4.at(-1)>e200_4&&e50_4>e200_4?"BULLISH":c4.at(-1)<e200_4&&e50_4<e200_4?"BEARISH":"MIXED",
     "1H":c1.at(-1)>e50_1&&e20_1>e50_1?"BULLISH":c1.at(-1)<e50_1&&e20_1<e50_1?"BEARISH":"MIXED",
     "15M":c15.at(-1)>ema(c15,20).at(-1)&&c15.at(-1)>c15.at(-2)?"RECOVERY":"WEAK",
     "5M":e9_5>e20_5&&c5.at(-1)>c5.at(-2)?"ENTRY MOMENTUM":"WAIT"
