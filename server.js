@@ -65,6 +65,8 @@ async function bybitRequest(apiPath){
   throw new Error("No Bybit adapter for "+u.pathname);
 }
 async function marketData(apiPath){
+  const allBinanceHostsCooling=HOSTS.every(host=>(hostCooldown.get(host)||0)>Date.now());
+  if(allBinanceHostsCooling){const data=await bybitRequest(apiPath);lastDataSource="BYBIT";return data;}
   try{const data=await binance(apiPath);lastDataSource="BINANCE";return data;}
   catch(primary){console.warn("[market-data] Binance unavailable; trying Bybit V5 Spot fallback:",primary.message);try{const data=await bybitRequest(apiPath);lastDataSource="BYBIT";return data;}
     catch(backup){console.error("[market-data] Bybit fallback unavailable:",backup.message);throw new Error("Primary Binance failed ("+primary.message+"); Bybit fallback failed ("+backup.message+")");}}
