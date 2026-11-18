@@ -34,7 +34,8 @@ async function loadSignals(force=false){
   const r=await fetch("/api/signals"+(force?"?refresh=1":""),{cache:"no-store"}),d=await r.json();
   if(!r.ok)throw new Error(d.detail||d.error||"Signal scan failed");
   const rows=d.signals||[];if(d.stale){box.dataset.stale="true";}else{box.dataset.stale="false";}
-  box.innerHTML=rows.length?rows.map(x=>{
+  const readyCount=rows.filter(x=>x.setupStatus==="READY"||x.side==="LONG").length,watchCount=rows.filter(x=>x.setupStatus==="WATCH").length;
+  box.innerHTML=rows.length?'<div class="signal-summary"><b>'+readyCount+' READY</b><b>'+watchCount+' WATCH</b><span>'+(rows.length-readyCount-watchCount)+' NO TRADE</span><small>Watch candidates are not entry signals. Wait for all confirmation rules.</small></div>'+rows.map(x=>{
    const ready=x.side==="LONG"&&x.plan;
    const blockers=x.blocked||[];
    const maxima={trend:20,momentum:15,volume:15,liquidity:15,structure:20,rr:15};
