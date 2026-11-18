@@ -57,7 +57,7 @@ async function saveSignal(signal) {
     VALUES($1,$2,$3,$4,$5::jsonb,$6::jsonb,NOW())
     ON CONFLICT(symbol) DO UPDATE SET side=EXCLUDED.side,score=EXCLUDED.score,grade=EXCLUDED.grade,
     plan=EXCLUDED.plan,payload=EXCLUDED.payload,updated_at=NOW()`,
-    [signal.symbol,signal.side,signal.score,signal.grade,JSON.stringify(signal.plan),JSON.stringify(signal)]);
+    [signal.symbol,signal.side,signal.score,signal.grade,signal.plan?JSON.stringify(signal.plan):null,JSON.stringify(signal)]);
 }
 async function ensureSignalTable() {
   await pool.query(`CREATE TABLE IF NOT EXISTS latest_signals (
