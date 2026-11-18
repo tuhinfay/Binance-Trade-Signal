@@ -18,7 +18,9 @@ Binance Spot multi-timeframe signal research dashboard with persistent Neon-back
 - Monitoring runs every 15 seconds while the Render service process is awake. Render Free may sleep; monitoring pauses during sleep. On wake the service resumes monitoring, but the current implementation cannot guarantee reconstruction of every intraminute price path during a long sleep.
 
 ## Market data and storage
-- Public Binance Spot endpoints; no API key and no order placement.
+- Primary public Binance Spot market data; automatic public Bybit V5 Spot fallback is used when Binance endpoints fail or are IP-blocked. No API key is required for public market data.
+- Provider is exposed in `/health`, `/api/market` and signal payloads so the UI can show whether Binance or Bybit supplied the data.
+- Bybit Spot candles do not expose the same taker-buy volume field used by Binance in this signal model; the engine marks taker flow as unavailable rather than fabricating a value. Bybit session change is explicitly labelled as a 24-hour proxy, not the Dhaka 06:00 session.
 - Top liquid USDT pairs, Bangladesh session reset at 06:00 Asia/Dhaka.
 - Market snapshots: top 10 pairs every five minutes, three-day retention.
 - Trade records and events are not subject to snapshot retention cleanup.
@@ -52,4 +54,4 @@ npm start
 - Free plan, Frankfurt region, Neon PostgreSQL.
 
 ## Scope and risk
-This is a read-only research and trade-monitoring tool. It does not place exchange orders. Spot signals are LONG-only; SHORT execution requires a separately implemented and validated Futures mode. No signal is guaranteed. Always verify liquidity, fees, position size and stop-loss before trading. Binance may rate-limit shared hosting IPs; endpoint failover and cooldown do not guarantee uninterrupted access.
+This is a read-only research and trade-monitoring tool. It does not place exchange orders. Spot signals are LONG-only; SHORT execution requires a separately implemented and validated Futures mode. No signal is guaranteed. Always verify liquidity, fees, position size and stop-loss before trading. Binance may rate-limit shared hosting IPs. Bybit is the current secondary provider; if both exchanges are unavailable, the app must report data offline rather than manufacture signals. Provider failover does not guarantee uninterrupted access.
