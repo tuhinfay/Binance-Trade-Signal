@@ -120,7 +120,7 @@ const server=http.createServer(async(req,res)=>{
   const url=new URL(req.url,"http://localhost");
   if(url.pathname==="/health")return sendJson(res,200,{ok:true,database:databaseStatus(),signalEngine:true,tradeMonitor:true});
   if(url.pathname==="/api/market"){try{return sendJson(res,200,await getMarket());}catch(e){return sendJson(res,502,{error:"Unable to load Binance market data",detail:e.message});}}
-  if(url.pathname==="/api/signals"){try{await monitorTrades();return sendJson(res,200,{updatedAt:new Date(lastSignalScanAt||Date.now()).toISOString(),signals:await scanSignals(url.searchParams.get("refresh")==="1")});}catch(e){return sendJson(res,502,{error:"Signal scan unavailable",detail:e.message});}}
+  if(url.pathname==="/api/signals"){try{await monitorTrades();return sendJson(res,200,{updatedAt:new Date(lastSignalScanAt||Date.now()).toISOString(),signals:await scanSignals(url.searchParams.get("refresh")==="1")});}catch(e){try{const saved=await readSignals();if(saved.length)return sendJson(res,200,{stale:true,error:"Live scan unavailable; showing last saved signals",signals:saved});}catch(_){}return sendJson(res,502,{error:"Signal scan unavailable",detail:e.message});}}
   if(url.pathname==="/api/trades"&&req.method==="GET"){try{return sendJson(res,200,(await listTrades(url.searchParams.get("history")==="1")).map(tradeJson));}catch(e){return sendJson(res,503,{error:e.message});}}
   if(url.pathname==="/api/trades"&&req.method==="POST"){
     try{let body="";for await(const chunk of req)body+=chunk;const x=JSON.parse(body||"{}");const symbol=String(x.symbol||"").toUpperCase(),side=String(x.side||"").toUpperCase();
@@ -141,7 +141,7 @@ const server=http.createServer(async(req,res)=>{
 });
 server.listen(PORT,"0.0.0.0",async()=>{
   console.log("Binance Trade Signal listening on "+PORT);
-  try{await initDatabase();console.log("[database] Neon schema ready");await monitorTrades();scanSignals().catch(e=>console.warn("[startup-scan]",e.message));}
+  try{await initDatabase();console.log("[database] Neon schema ready");signalCache=await readSignals();await monitorTrades();scanSignals().catch(e=>console.warn("[startup-scan]",e.message));}
   catch(e){console.error("[database] Neon unavailable:",e.message);}
   setInterval(()=>scanSignals().catch(e=>console.warn("[signal-scan]",e.message)),SIGNAL_SCAN_MS);
   setInterval(()=>monitorTrades().catch(e=>console.warn("[trade-monitor]",e.message)),MONITOR_MS);
