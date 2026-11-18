@@ -78,7 +78,7 @@ function analyzeFrames(symbol, frames, book) {
     "Insufficient room to resistance":"Wait for a cleaner breakout or better reward/risk"
   }[x]||x));
   const plan=side==="LONG"?{entry:price,entry_zone:[price-0.1*a,price+0.1*a],stop,tp1:price+risk*1.5,tp2:price+risk*2.5,tp3:price+risk*4,rr:[1.5,2.5,4],atr:a,trail_dist:1.2*a}:null;
-  return {symbol,market:"spot",timestamp:Date.now(),price,side,grade:score>=85?"STRONG":score>=75?"GOOD":score>=55?"WATCH":"WAIT",setupStatus,score,breakdown:points,reasons,blocked,nextConditions,timeframes:timeframeStatus,plan,metrics:{rsi:+r.toFixed(1),atr_pct:+(a/price*100).toFixed(3),rvol:+rvol.toFixed(2),spread_pct:+spread.toFixed(4),book_imbalance:+imb.toFixed(3),taker_buy_ratio:taker===null?null:+taker.toFixed(3)},timeframes:{trend:"4h + 1h",setup:"15m",entry:"5m"},dataQuality:{closedCandlesOnly:true,takerFlowAvailable:taker!==null,bookDepthLevels:20},disclaimer:"Confluence score is not a win probability. Confirm risk before entering."};
+  return {symbol,market:"spot",timestamp:Date.now(),price,side,grade:score>=85?"STRONG":score>=75?"GOOD":score>=55?"WATCH":"WAIT",setupStatus,score,breakdown:points,reasons,blocked,nextConditions,timeframes:timeframeStatus,plan,metrics:{rsi:+r.toFixed(1),atr_pct:+(a/price*100).toFixed(3),rvol:+rvol.toFixed(2),spread_pct:+spread.toFixed(4),book_imbalance:+imb.toFixed(3),taker_buy_ratio:taker===null?null:+taker.toFixed(3)},dataQuality:{closedCandlesOnly:true,takerFlowAvailable:taker!==null,bookDepthLevels:20},disclaimer:"Confluence score is not a win probability. Confirm risk before entering."};
 }
 async function analyzeSymbol(symbol, getJson) {
   const intervals=["4h","1h","15m","5m"];
