@@ -102,7 +102,7 @@ async function scanSignals(force=false){
   signalScanInFlight=(async()=>{
     const market=await getMarket(),liquid=market.markets.slice().sort((a,b)=>b.quoteVolume-a.quoteVolume).slice(0,7).map(x=>x.symbol);
     const symbols=[...new Set([...CORE,...liquid])];let cursor=0;const out=new Array(symbols.length),failures=[];
-    async function worker(){while(cursor<symbols.length){const i=cursor++,symbol=symbols[i];try{out[i]=await analyzeSymbol(symbol,marketData);await saveSignal(out[i]);}catch(e){failures.push(symbol+": "+e.message);console.warn("[signal]",symbol,e.message);}}}
+    async function worker(){while(cursor<symbols.length){const i=cursor++,symbol=symbols[i];try{out[i]=await analyzeSymbol(symbol,marketData);out[i].source=lastDataSource;await saveSignal(out[i]);}catch(e){failures.push(symbol+": "+e.message);console.warn("[signal]",symbol,e.message);}}}
     await Promise.all(Array.from({length:1},worker));
     const results=out.filter(Boolean).sort((a,b)=>b.score-a.score);
     if(!results.length)throw new Error("No symbols could be analyzed. Binance API may be rate-limiting or blocking this server. "+failures.slice(0,3).join(" | "));
