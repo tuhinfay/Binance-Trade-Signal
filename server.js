@@ -28,6 +28,48 @@ async function binance(apiPath){
   }
   throw new Error("Binance endpoints unavailable: "+failures.join(" | "));
 }
+
+const BYBIT_HOST="https://api.bybit.com";
+let lastDataSource="BINANCE",bybitCooldownUntil=0;
+const intervalMap={"1m":"1","3m":"3","5m":"5","15m":"15","30m":"30","1h":"60","2h":"120","4h":"240","6h":"360","12h":"720","1d":"D","1w":"W","1M":"M"};
+async function bybitRequest(apiPath){
+  if(Date.now()<bybitCooldownUntil)throw new Error("Bybit fallback cooling down");
+  const u=new URL(apiPath,"https://local.invalid"),p=u.searchParams,symbol=p.get("symbol");
+  let endpoint,params=new URLSearchParams({category:"spot"});
+  if(u.pathname.endsWith("/ticker/24hr")){
+    endpoint="/v5/market/tickers";if(symbol)params.set("symbol",symbol);
+    const r=await fetch(BYBIT_HOST+endpoint+"?"+params,{headers:{"Accept":"application/json"},signal:AbortSignal.timeout(10000)});
+    if(!r.ok)throw new Error("Bybit HTTP "+r.status);const j=await r.json();if(j.retCode!==0){if([10006,10018].includes(j.retCode))bybitCooldownUntil=Date.now()+60000;throw new Error("Bybit "+j.retCode+": "+j.retMsg);}
+    return (j.result.list||[]).map(t=>({symbol:t.symbol,lastPrice:t.lastPrice,openPrice:t.prevPrice24h,priceChangePercent:String(Number(t.price24hPcnt)*100),highPrice:t.highPrice24h,lowPrice:t.lowPrice24h,quoteVolume:t.turnover24h,count:0}));
+  }
+  if(u.pathname.endsWith("/klines")){
+    endpoint="/v5/market/kline";params.set("symbol",symbol);const iv=p.get("interval");params.set("interval",intervalMap[iv]||iv);params.set("limit",p.get("limit")||"200");
+    if(p.has("startTime"))params.set("start",p.get("startTime"));
+    const r=await fetch(BYBIT_HOST+endpoint+"?"+params,{headers:{"Accept":"application/json"},signal:AbortSignal.timeout(10000)});
+    if(!r.ok)throw new Error("Bybit HTTP "+r.status);const j=await r.json();if(j.retCode!==0){if([10006,10018].includes(j.retCode))bybitCooldownUntil=Date.now()+60000;throw new Error("Bybit "+j.retCode+": "+j.retMsg);}
+    const duration=({"1m":60000,"3m":180000,"5m":300000,"15m":900000,"30m":1800000,"1h":3600000,"2h":7200000,"4h":14400000,"6h":21600000,"12h":43200000,"1d":86400000,"1w":604800000}[iv]||86400000);
+    return (j.result.list||[]).slice().reverse().map(k=>[k[0],k[1],k[2],k[3],k[4],k[5],String(Number(k[0])+duration-1),k[6],"0",null,null]);
+  }
+  if(u.pathname.endsWith("/depth")){
+    endpoint="/v5/market/orderbook";params.set("symbol",symbol);params.set("limit",p.get("limit")||"20");
+    const r=await fetch(BYBIT_HOST+endpoint+"?"+params,{headers:{"Accept":"application/json"},signal:AbortSignal.timeout(10000)});
+    if(!r.ok)throw new Error("Bybit HTTP "+r.status);const j=await r.json();if(j.retCode!==0){if([10006,10018].includes(j.retCode))bybitCooldownUntil=Date.now()+60000;throw new Error("Bybit "+j.retCode+": "+j.retMsg);}
+    return {bids:j.result.b||j.result.bids||[],asks:j.result.a||j.result.asks||[]};
+  }
+  if(u.pathname.endsWith("/ticker/price")){
+    endpoint="/v5/market/tickers";params.set("symbol",symbol);
+    const r=await fetch(BYBIT_HOST+endpoint+"?"+params,{headers:{"Accept":"application/json"},signal:AbortSignal.timeout(10000)});
+    if(!r.ok)throw new Error("Bybit HTTP "+r.status);const j=await r.json();if(j.retCode!==0){if([10006,10018].includes(j.retCode))bybitCooldownUntil=Date.now()+60000;throw new Error("Bybit "+j.retCode+": "+j.retMsg);}
+    const t=j.result.list?.[0];if(!t)throw new Error("Bybit spot pair unavailable: "+symbol);return {symbol:t.symbol,price:t.lastPrice};
+  }
+  throw new Error("No Bybit adapter for "+u.pathname);
+}
+async function marketData(apiPath){
+  try{const data=await binance(apiPath);lastDataSource="BINANCE";return data;}
+  catch(primary){try{const data=await bybitRequest(apiPath);lastDataSource="BYBIT";return data;}
+    catch(backup){throw new Error("Primary Binance failed ("+primary.message+"); Bybit fallback failed ("+backup.message+")");}}
+}
+
 async function getOne(symbol,hint){
   const t=hint||await marketData("/api/v3/ticker/24hr?symbol="+encodeURIComponent(symbol));
   let open=Number(t.openPrice),sessionChange=Number(t.priceChangePercent);
@@ -46,7 +88,7 @@ async function getMarket(){
     let cursor=0;const rows=new Array(liquid.length);
     async function worker(){while(cursor<liquid.length){const i=cursor++,t=liquid[i];try{rows[i]=await getOne(t.symbol,t);}catch(e){rows[i]={symbol:t.symbol,price:Number(t.lastPrice),change24h:Number(t.priceChangePercent),sessionChange:Number(t.priceChangePercent),quoteVolume:Number(t.quoteVolume),high:Number(t.highPrice),low:Number(t.lowPrice),open:Number(t.openPrice),fallback:true};}}}
     await Promise.all(Array.from({length:3},worker));
-    const data={updatedAt:new Date().toISOString(),timezone:"Asia/Dhaka",sessionReset:"06:00",markets:rows.filter(Boolean)};
+    const data={updatedAt:new Date().toISOString(),timezone:"Asia/Dhaka",sessionReset:"06:00",source:lastDataSource,sessionMode:lastDataSource==="BYBIT"?"24h proxy · BYBIT":"Dhaka 06:00 · BINANCE",markets:rows.filter(Boolean)};
     if(!data.markets.length)throw new Error("No USDT spot markets returned");
     marketCache={at:Date.now(),data};
     if(Date.now()-lastSnapshotAt>=5*60*1000){lastSnapshotAt=Date.now();saveSnapshots(data.markets).catch(e=>console.error("[snapshot]",e.message));}
@@ -60,7 +102,7 @@ async function scanSignals(force=false){
   signalScanInFlight=(async()=>{
     const market=await getMarket(),liquid=market.markets.slice().sort((a,b)=>b.quoteVolume-a.quoteVolume).slice(0,7).map(x=>x.symbol);
     const symbols=[...new Set([...CORE,...liquid])];let cursor=0;const out=new Array(symbols.length),failures=[];
-    async function worker(){while(cursor<symbols.length){const i=cursor++,symbol=symbols[i];try{out[i]=await analyzeSymbol(symbol,binance);await saveSignal(out[i]);}catch(e){failures.push(symbol+": "+e.message);console.warn("[signal]",symbol,e.message);}}}
+    async function worker(){while(cursor<symbols.length){const i=cursor++,symbol=symbols[i];try{out[i]=await analyzeSymbol(symbol,marketData);await saveSignal(out[i]);}catch(e){failures.push(symbol+": "+e.message);console.warn("[signal]",symbol,e.message);}}}
     await Promise.all(Array.from({length:2},worker));
     const results=out.filter(Boolean).sort((a,b)=>b.score-a.score);
     if(!results.length)throw new Error("No symbols could be analyzed. Binance API may be rate-limiting or blocking this server. "+failures.slice(0,3).join(" | "));
@@ -121,7 +163,7 @@ async function serveStatic(req,res,url){
 }
 const server=http.createServer(async(req,res)=>{
   const url=new URL(req.url,"http://localhost");
-  if(url.pathname==="/health")return sendJson(res,200,{ok:true,database:databaseStatus(),signalEngine:true,tradeMonitor:true});
+  if(url.pathname==="/health")return sendJson(res,200,{ok:true,database:databaseStatus(),signalEngine:true,tradeMonitor:true,marketDataSource:lastDataSource,bybitFallbackConfigured:true});
   if(url.pathname==="/api/market"){try{return sendJson(res,200,await getMarket());}catch(e){return sendJson(res,502,{error:"Unable to load market data from all providers",detail:e.message});}}
   if(url.pathname==="/api/signals"){try{await monitorTrades();const signals=await scanSignals(url.searchParams.get("refresh")==="1");return sendJson(res,200,{updatedAt:new Date(lastSignalScanAt||Date.now()).toISOString(),source:lastDataSource,signals});}catch(e){try{const saved=await readSignals();if(saved.length)return sendJson(res,200,{stale:true,error:"Live scan unavailable; showing last saved signals",signals:saved});}catch(_){}return sendJson(res,502,{error:"Signal scan unavailable",detail:e.message});}}
   if(url.pathname==="/api/trades"&&req.method==="GET"){try{return sendJson(res,200,(await listTrades(url.searchParams.get("history")==="1")).map(tradeJson));}catch(e){return sendJson(res,503,{error:e.message});}}
