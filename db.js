@@ -68,7 +68,7 @@ async function ensureSignalTable() {
 async function readSignals() {
   if(!pool||state!=="connected")return [];
   await ensureSignalTable();
-  const r=await pool.query("SELECT payload FROM latest_signals ORDER BY score DESC,updated_at DESC");
+  const r=await pool.query("SELECT payload FROM latest_signals WHERE symbol NOT IN ('USDCUSDT','FDUSDUSDT','TUSDUSDT','USDPUSDT','DAIUSDT','BUSDUSDT','EURUSDT','AEURUSDT','USDEUSDT','XUSDUSDT','USD1USDT') ORDER BY score DESC,updated_at DESC");
   return r.rows.map(x=>x.payload);
 }
 async function createTrade(t) {
