@@ -75,7 +75,7 @@ async function getOne(symbol,hint){
   let open=Number(t.openPrice),sessionChange=Number(t.priceChangePercent);
   const cached=pairCache.get(symbol);
   if(lastDataSource!=="BYBIT"&&cached&&Date.now()-cached.at<300000)open=cached.open;
-  else if(lastDataSource!=="BYBIT")try{const k=await marketData("/api/v3/klines?symbol="+encodeURIComponent(symbol)+"&interval=1d&timeZone=6&limit=1");if(k.length){open=Number(k[0][1]);pairCache.set(symbol,{at:Date.now(),open});}}catch(e){console.warn("[session]",symbol,e.message);}
+  else if(lastDataSource!=="BYBIT")try{const k=await binance("/api/v3/klines?symbol="+encodeURIComponent(symbol)+"&interval=1d&timeZone=6&limit=1");if(k.length){open=Number(k[0][1]);pairCache.set(symbol,{at:Date.now(),open});}}catch(e){console.warn("[session]",symbol,e.message);}
   const price=Number(t.lastPrice);if(open>0)sessionChange=(price-open)/open*100;
   return {symbol:t.symbol,price,change24h:Number(t.priceChangePercent),sessionChange,sessionMode:lastDataSource==="BYBIT"?"24h proxy · BYBIT":"Dhaka 06:00 · BINANCE",quoteVolume:Number(t.quoteVolume),high:Number(t.highPrice),low:Number(t.lowPrice),open,trades:Number(t.count),source:lastDataSource};
 }
