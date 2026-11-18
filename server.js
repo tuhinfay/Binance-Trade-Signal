@@ -73,20 +73,39 @@ async function monitorTrades(){
   monitorInFlight=(async()=>{
     const rows=await listTrades(false);
     for(const raw of rows){
-      const t={...raw,id:n(raw.id),entry:n(raw.entry),stop_loss:n(raw.stop_loss),initial_stop:n(raw.initial_stop),tp1:n(raw.take_profit_1),tp2:n(raw.take_profit_2),tp3:n(raw.take_profit_3),trail_distance:n(raw.trail_distance),tp1_hit:raw.tp1_hit,tp2_hit:raw.tp2_hit};
-      try{
-        const p=await binance("/api/v3/ticker/price?symbol="+encodeURIComponent(t.symbol)),price=Number(p.price);
-        const s=t.side==="LONG"?1:-1;
-        if((price-t.stop_loss)*s<=0){await closeTrade(t.id,price,"STOP_LOSS");continue;}
-        if(t.tp1&&!t.tp1_hit&&(price-t.tp1)*s>=0){t.tp1_hit=true;const old=t.stop_loss;t.stop_loss=t.entry;await recordTradeEvent(t.id,"TP1_HIT",price,{oldStop:old,newStop:t.stop_loss});}
-        if(t.tp2&&!t.tp2_hit&&(price-t.tp2)*s>=0){t.tp2_hit=true;const old=t.stop_loss;t.stop_loss=t.tp1||t.entry;await recordTradeEvent(t.id,"TP2_HIT",price,{oldStop:old,newStop:t.stop_loss});}
-        if(t.tp3&&(price-t.tp3)*s>=0){await closeTrade(t.id,price,"TAKE_PROFIT_3");continue;}
+      const t={...raw,id:n(raw.id),entry:n(raw.entry),stop_loss:n(raw.stop_loss),initial_stop:n(raw.initial_stop),tp1:n(raw.take_profit_1),tp2:n(raw.take_profit_2),tp3:n(raw.take_profit_3),trail_distance:n(raw.trail_distance),tp1_hit:raw.tp1_hit,tp2_hit:raw.tp2_hit,last_checked_at:raw.last_checked_at};
+      const side=t.side==="LONG"?1:-1;
+      async function applyPrice(price,high=price,low=price){
+        if((low-t.stop_loss)*side<=0){await closeTrade(t.id,t.stop_loss,"STOP_LOSS");return true;}
+        if(t.tp1&&!t.tp1_hit&&(high-t.tp1)*side>=0){t.tp1_hit=true;const old=t.stop_loss;t.stop_loss=t.entry;await recordTradeEvent(t.id,"TP1_HIT",t.tp1,{oldStop:old,newStop:t.stop_loss});}
+        if(t.tp2&&!t.tp2_hit&&(high-t.tp2)*side>=0){t.tp2_hit=true;const old=t.stop_loss;t.stop_loss=t.tp1||t.entry;await recordTradeEvent(t.id,"TP2_HIT",t.tp2,{oldStop:old,newStop:t.stop_loss});}
+        if(t.tp3&&(high-t.tp3)*side>=0){await closeTrade(t.id,t.tp3,"TAKE_PROFIT_3");return true;}
         if(t.trail_distance>0&&Math.abs(price-t.entry)>=Math.abs(t.initial_stop-t.entry)){
-          const candidate=price-s*t.trail_distance;
-          if((candidate-t.stop_loss)*s>0){t.stop_loss=candidate;await recordTradeEvent(t.id,"TRAILING_STOP",price,{newStop:candidate});}
+          const candidate=price-side*t.trail_distance;
+          if((candidate-t.stop_loss)*side>0){t.stop_loss=candidate;await recordTradeEvent(t.id,"TRAILING_STOP",price,{newStop:candidate});}
         }
-        t.last_price=price;
-        await updateTrade(t);
+        t.last_price=price;return false;
+      }
+      try{
+        const lastChecked=t.last_checked_at?new Date(t.last_checked_at).getTime():new Date(t.opened_at).getTime();
+        const interval=Date.now()-lastChecked>1000*60*1000?"1h":"1m";
+        const intervalMs=interval==="1h"?3600000:60000;
+        const candles=await binance("/api/v3/klines?symbol="+encodeURIComponent(t.symbol)+"&interval="+interval+"&startTime="+Math.max(0,lastChecked+1)+"&limit=1000");
+        for(const k of candles){
+          if(Number(k[6])>=Date.now())continue;
+          const high=Number(k[2]),low=Number(k[3]),close=Number(k[4]);
+          if(await applyPrice(close,high,low))break;
+          t.last_checked_at=new Date(Number(k[6]));
+        }
+        if(t.last_checked_at&&t.status!=="CLOSED"){
+          const p=await binance("/api/v3/ticker/price?symbol="+encodeURIComponent(t.symbol)),price=Number(p.price);
+          if(await applyPrice(price))continue;
+          await updateTrade(t);
+        }else if(t.status!=="CLOSED"){
+          const p=await binance("/api/v3/ticker/price?symbol="+encodeURIComponent(t.symbol)),price=Number(p.price);
+          if(await applyPrice(price))continue;
+          await updateTrade(t);
+        }
       }catch(e){console.warn("[trade-monitor]",t.symbol,e.message);}
     }
   })().finally(()=>monitorInFlight=null);
