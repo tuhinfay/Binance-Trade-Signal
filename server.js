@@ -222,12 +222,15 @@ const server=http.createServer(async(req,res)=>{
       const market=String(x.market||"spot").toLowerCase();
       if(!/^[A-Z0-9]{2,20}USDT$/.test(symbol)||!["LONG","SHORT"].includes(side)||!["spot","futures"].includes(market))return sendJson(res,400,{error:"Use a valid USDT pair, LONG/SHORT side and spot/futures market"});
       if(market==="spot"&&side!=="LONG")return sendJson(res,400,{error:"Spot tracking supports LONG only"});
+      const orderType=String(x.orderType||"MARKET").toUpperCase();
+      if(!["MARKET","LIMIT"].includes(orderType))return sendJson(res,400,{error:"Order type must be MARKET or LIMIT"});
+      if(orderType==="LIMIT"&&market!=="futures")return sendJson(res,400,{error:"Limit paper orders are supported on Futures only"});
       let entry=n(x.entry);const limitPrice=n(x.limitPrice),stop=n(x.stop),tp1=n(x.tp1),tp2=n(x.tp2),tp3=n(x.tp3);
+      if(orderType==="LIMIT"){if(!(limitPrice>0))return sendJson(res,400,{error:"Enter a valid limit price"});entry=limitPrice;}
+      else if(market==="futures"){const live=await futuresMarketData("/fapi/v1/ticker/price?symbol="+encodeURIComponent(symbol));entry=n(live.price);}
       const valid=side==="LONG"?(entry>0&&stop>0&&stop<entry&&tp1>entry&&tp2>tp1&&tp3>tp2):(entry>0&&stop>entry&&tp1<entry&&tp2<tp1&&tp3<tp2&&tp3>0);
       if(!valid)return sendJson(res,400,{error:side==="LONG"?"Invalid LONG plan: stop < entry < TP1 < TP2 < TP3":"Invalid SHORT plan: TP3 < TP2 < TP1 < entry < stop"});
       const leverage=market==="futures"?Math.min(20,Math.max(1,n(x.leverage)||1)):1;
-      if(orderType==="MARKET"&&market==="futures"){const live=await futuresMarketData("/fapi/v1/ticker/price?symbol="+encodeURIComponent(symbol));entry=n(live.price);}
-      if(orderType==="LIMIT"&&(!(limitPrice>0)||Math.abs(entry-limitPrice)>Math.max(1e-8,limitPrice*1e-8)))return sendJson(res,400,{error:"Limit entry must equal the limit price"});
       const saved=await createTrade({symbol,side,market,entry,stop,tp1,tp2,tp3,quantity:n(x.quantity),leverage,trailDistance:n(x.trailDistance),orderType,limitPrice,notes:String(x.notes||"")});
       return sendJson(res,201,{trade:tradeJson(saved)});
     }catch(e){return sendJson(res,503,{error:"Trade could not be saved to Neon",detail:e.message});}
