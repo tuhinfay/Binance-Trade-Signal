@@ -172,7 +172,8 @@ async function monitorTrades(){
         const lastChecked=t.last_checked_at?new Date(t.last_checked_at).getTime():new Date(t.opened_at).getTime();
         const interval=Date.now()-lastChecked>1000*60*1000?"1h":"1m";
         const intervalMs=interval==="1h"?3600000:60000;
-        const candlePath=(t.market==="futures"?"/fapi/v1/klines":"/api/v3/klines")+"?symbol="+encodeURIComponent(t.symbol)+"&interval="+interval+"&startTime="+Math.max(0,lastChecked+1)+"&limit=1000";\n        const candles=await (t.market==="futures"?futuresMarketData(candlePath):marketData(candlePath));
+        const candlePath=(t.market==="futures"?"/fapi/v1/klines":"/api/v3/klines")+"?symbol="+encodeURIComponent(t.symbol)+"&interval="+interval+"&startTime="+Math.max(0,lastChecked+1)+"&limit=1000";;
+        const candles=await (t.market==="futures"?futuresMarketData(candlePath):marketData(candlePath));
         for(const k of candles){
           if(Number(k[6])>=Date.now())continue;
           const high=Number(k[2]),low=Number(k[3]),close=Number(k[4]);
@@ -180,11 +181,13 @@ async function monitorTrades(){
           t.last_checked_at=new Date(Number(k[6]));
         }
         if(t.last_checked_at&&t.status!=="CLOSED"){
-          const pricePath=(t.market==="futures"?"/fapi/v1/ticker/price":"/api/v3/ticker/price")+"?symbol="+encodeURIComponent(t.symbol);\n          const p=await (t.market==="futures"?futuresMarketData(pricePath):marketData(pricePath)),price=Number(p.price);
+          const pricePath=(t.market==="futures"?"/fapi/v1/ticker/price":"/api/v3/ticker/price")+"?symbol="+encodeURIComponent(t.symbol);;
+          const p=await (t.market==="futures"?futuresMarketData(pricePath):marketData(pricePath)),price=Number(p.price);
           if(await applyPrice(price))continue;
           await updateTrade(t);
         }else if(t.status!=="CLOSED"){
-          const p=await marketData("/api/v3/ticker/price?symbol="+encodeURIComponent(t.symbol)),price=Number(p.price);
+          const pricePath=(t.market==="futures"?"/fapi/v1/ticker/price":"/api/v3/ticker/price")+"?symbol="+encodeURIComponent(t.symbol);
+          const p=await (t.market==="futures"?futuresMarketData(pricePath):marketData(pricePath)),price=Number(p.price);
           if(await applyPrice(price))continue;
           await updateTrade(t);
         }
