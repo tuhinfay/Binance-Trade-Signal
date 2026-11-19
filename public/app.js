@@ -34,9 +34,9 @@ async function loadSignals(force=false){
   const r=await fetch("/api/signals"+(force?"?refresh=1":""),{cache:"no-store"}),d=await r.json();
   if(!r.ok)throw new Error(d.detail||d.error||"Signal scan failed");
   const rows=d.signals||[];if(d.stale){box.dataset.stale="true";}else{box.dataset.stale="false";}
-  const readyCount=rows.filter(x=>x.setupStatus==="READY"||x.side==="LONG").length,watchCount=rows.filter(x=>x.setupStatus==="WATCH").length;
+  const readyCount=rows.filter(x=>x.setupStatus==="READY"&&!!x.plan&&["LONG","SHORT"].includes(x.side)).length,watchCount=rows.filter(x=>x.setupStatus==="WATCH").length;
   box.innerHTML=rows.length?'<div class="signal-summary"><b>'+readyCount+' READY</b><b>'+watchCount+' WATCH</b><span>'+(rows.length-readyCount-watchCount)+' NO TRADE</span><small>Watch candidates are not entry signals. Wait for all confirmation rules.</small></div>'+rows.map(x=>{
-   const ready=x.side==="LONG"&&x.plan;
+   const ready=x.setupStatus==="READY"&&!!x.plan&&["LONG","SHORT"].includes(x.side);
    const blockers=x.blocked||[];
    const maxima={trend:20,momentum:15,volume:15,liquidity:15,structure:20,rr:15};
    const breakdown=Object.entries(x.breakdown||{}).map(([key,value])=>{const max=maxima[key]||20;return '<div class="score-part"><span>'+esc(key)+'</span><b>'+Number(value)+'/'+max+'</b><i><em style="width:'+Math.max(0,Math.min(100,Number(value)/max*100))+'%"></em></i></div>'}).join("");
@@ -44,7 +44,7 @@ async function loadSignals(force=false){
     ? '<div class="signal-levels"><span>Entry <b>$'+fmt(x.plan.entry)+'</b></span><span>Stop <b class="negative">$'+fmt(x.plan.stop)+'</b></span><span>TP1 <b class="positive">$'+fmt(x.plan.tp1)+'</b></span><span>TP2 <b class="positive">$'+fmt(x.plan.tp2)+'</b></span><span>TP3 <b class="positive">$'+fmt(x.plan.tp3)+'</b></span></div><button class="primary-btn track-signal" data-symbol="'+esc(x.symbol)+'">Track this trade</button>'
     : '<div class="signal-levels"><span>RSI <b>'+fmt(x.metrics?.rsi??0)+'</b></span><span>Rel. volume <b>'+fmt(x.metrics?.rvol??0)+'x</b></span><span>ATR <b>'+fmt(x.metrics?.atr_pct??0)+'%</b></span><span>Spread <b>'+fmt(x.metrics?.spread_pct??0)+'%</b></span><span>Bid depth <b>'+fmt((x.metrics?.book_imbalance??0)*100)+'%</b></span><span>Taker flow <b>'+(x.metrics?.taker_buy_ratio==null?'N/A':fmt(x.metrics.taker_buy_ratio*100)+'%')+'</b></span></div>';
    const state=x.setupStatus||(ready?'READY':'NO TRADE');
-   const reason=ready?'Qualified LONG setup':(state==='WATCH'?'WATCH ONLY · '+(blockers.length?blockers.join(' · '):'Waiting for stronger confluence'):'NO TRADE · '+(blockers.length?blockers.join(' · '):'Confluence threshold not met'));
+   const reason=ready?(x.side+" setup qualified"):(state==='WATCH'?'WATCH ONLY · '+(blockers.length?blockers.join(' · '):'Waiting for stronger confluence'):'NO TRADE · '+(blockers.length?blockers.join(' · '):'Confluence threshold not met'));
    const tf=Object.entries(x.timeframes||{}).map(([key,value])=>'<span class="tf-chip"><b>'+esc(key)+'</b> '+esc(value)+'</span>').join('');
    const next=(x.nextConditions||[]).map(v=>'<li>'+esc(v)+'</li>').join('');
    return '<article class="signal-card"><div class="signal-top"><div><b>'+esc(x.symbol)+'</b><span class="signal-grade">'+esc(x.grade||state)+'</span><span class="setup-state '+state.toLowerCase().replace(/[^a-z]/g,'-')+'">'+esc(state)+'</span></div><strong>'+Number(x.score||0)+'/100</strong></div><div class="timeframe-grid">'+tf+'</div><div class="score-breakdown">'+breakdown+'</div><p class="signal-reasons">'+esc(reason)+'</p>'+(next?'<ul class="next-conditions">'+next+'</ul>':'')+'<small class="signal-source">Source: '+esc(x.source||d.source||"exchange")+' · Closed candles</small>'+details+'</article>';
@@ -55,7 +55,7 @@ async function loadSignals(force=false){
 async function trackSignal(symbol,rows){
  const s=rows.find(x=>x.symbol===symbol);if(!s||!s.plan)return;
  try{
-  const p=s.plan,r=await fetch("/api/trades",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({symbol,side:"LONG",entry:p.entry,stop:p.stop,tp1:p.tp1,tp2:p.tp2,tp3:p.tp3,trailDistance:p.trail_dist,notes:"Tracked from signal score "+s.score})});
+  const p=s.plan,r=await fetch("/api/trades",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({symbol,side:s.side,market:s.market||"spot",entry:p.entry,stop:p.stop,tp1:p.tp1,tp2:p.tp2,tp3:p.tp3,trailDistance:p.trail_dist,notes:"Tracked from signal score "+s.score})});
   const d=await r.json();if(!r.ok)throw new Error(d.detail||d.error||"Could not save trade");
   toast(symbol+" trade saved in Neon");loadTrades();
  }catch(e){toast("Trade not saved: "+e.message)}
@@ -64,7 +64,50 @@ async function loadTrades(){
  const box=$("trades");if(!box)return;
  try{
   const r=await fetch("/api/trades",{cache:"no-store"}),rows=await r.json();if(!r.ok)throw new Error(rows.error||"Trade list unavailable");
-  box.innerHTML=rows.length?rows.map(t=>'<article class="trade-row"><div><b>'+esc(t.symbol)+' · '+esc(t.side)+'</b><small>Entry $'+fmt(t.entry)+' · Last $'+fmt(t.lastPrice||t.entry)+'</small><small>SL $'+fmt(t.stopLoss)+' · TP3 $'+fmt(t.tp3)+'</small></div><div class="trade-state"><span class="tag">'+esc(t.status)+'</span><button class="outline-btn close-trade" data-id="'+t.id+'">Close trade</button></div></article>').join(""):'<div class="empty">No open trades. Track a qualified signal to save it in Neon.</div>';
+  box.innerHTML=rows.length?rows.map(t=>{const last=Number(t.lastPrice||t.entry),direction=t.side==="LONG"?1:-1,move=(last-Number(t.entry))/Number(t.entry)*100*direction,leveraged=move*Number(t.leverage||1);return '<article class="trade-row"><div><b>'+esc(t.symbol)+' · '+esc(t.side)+' · '+esc((t.market||"spot").toUpperCase())+'</b><small>Entry 
+  box.querySelectorAll(".close-trade").forEach(b=>b.addEventListener("click",async()=>{if(!confirm("Close this tracked trade?"))return;const z=await fetch("/api/trades/"+b.dataset.id+"/close",{method:"POST",headers:{"content-type":"application/json"},body:"{}"});if(z.ok){toast("Trade closed and retained in Neon history");loadTrades()}else toast("Could not close trade")}));
+ }catch(e){box.innerHTML='<div class="empty">Trade history unavailable: '+esc(e.message)+'</div>'}
+}
+const paperForm=$("futures-paper-form");
+if(paperForm)paperForm.addEventListener("submit",async e=>{
+ e.preventDefault();
+ const payload={symbol:$("paper-symbol").value.trim().toUpperCase(),side:$("paper-side").value,market:"futures",entry:Number($("paper-entry").value),stop:Number($("paper-stop").value),tp1:Number($("paper-tp1").value),tp2:Number($("paper-tp2").value),tp3:Number($("paper-tp3").value),leverage:Number($("paper-leverage").value),notes:"Manual Futures paper trade"};
+ try{const r=await fetch("/api/trades",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload)}),d=await r.json();if(!r.ok)throw new Error(d.detail||d.error||"Could not start paper trade");toast(payload.symbol+" "+payload.side+" paper tracking started");paperForm.reset();$("paper-symbol").value="BTCUSDT";$("paper-leverage").value="1";loadTrades();}
+ catch(err){toast("Paper trade not saved: "+err.message)}
+});
+const signalRefresh=$("signal-refresh");if(signalRefresh)signalRefresh.addEventListener("click",()=>loadSignals(true));
+loadSignals();loadTrades();setInterval(()=>{loadSignals();loadTrades()},60000);
++fmt(t.entry)+' · Last 
+  box.querySelectorAll(".close-trade").forEach(b=>b.addEventListener("click",async()=>{if(!confirm("Close this tracked trade?"))return;const z=await fetch("/api/trades/"+b.dataset.id+"/close",{method:"POST",headers:{"content-type":"application/json"},body:"{}"});if(z.ok){toast("Trade closed and retained in Neon history");loadTrades()}else toast("Could not close trade")}));
+ }catch(e){box.innerHTML='<div class="empty">Trade history unavailable: '+esc(e.message)+'</div>'}
+}
+const signalRefresh=$("signal-refresh");if(signalRefresh)signalRefresh.addEventListener("click",()=>loadSignals(true));
+loadSignals();loadTrades();setInterval(()=>{loadSignals();loadTrades()},60000);
++fmt(last)+' · '+fmt(t.leverage||1)+'x</small><small>SL 
+  box.querySelectorAll(".close-trade").forEach(b=>b.addEventListener("click",async()=>{if(!confirm("Close this tracked trade?"))return;const z=await fetch("/api/trades/"+b.dataset.id+"/close",{method:"POST",headers:{"content-type":"application/json"},body:"{}"});if(z.ok){toast("Trade closed and retained in Neon history");loadTrades()}else toast("Could not close trade")}));
+ }catch(e){box.innerHTML='<div class="empty">Trade history unavailable: '+esc(e.message)+'</div>'}
+}
+const signalRefresh=$("signal-refresh");if(signalRefresh)signalRefresh.addEventListener("click",()=>loadSignals(true));
+loadSignals();loadTrades();setInterval(()=>{loadSignals();loadTrades()},60000);
++fmt(t.stopLoss)+' · TP1 
+  box.querySelectorAll(".close-trade").forEach(b=>b.addEventListener("click",async()=>{if(!confirm("Close this tracked trade?"))return;const z=await fetch("/api/trades/"+b.dataset.id+"/close",{method:"POST",headers:{"content-type":"application/json"},body:"{}"});if(z.ok){toast("Trade closed and retained in Neon history");loadTrades()}else toast("Could not close trade")}));
+ }catch(e){box.innerHTML='<div class="empty">Trade history unavailable: '+esc(e.message)+'</div>'}
+}
+const signalRefresh=$("signal-refresh");if(signalRefresh)signalRefresh.addEventListener("click",()=>loadSignals(true));
+loadSignals();loadTrades();setInterval(()=>{loadSignals();loadTrades()},60000);
++fmt(t.tp1)+' · TP2 
+  box.querySelectorAll(".close-trade").forEach(b=>b.addEventListener("click",async()=>{if(!confirm("Close this tracked trade?"))return;const z=await fetch("/api/trades/"+b.dataset.id+"/close",{method:"POST",headers:{"content-type":"application/json"},body:"{}"});if(z.ok){toast("Trade closed and retained in Neon history");loadTrades()}else toast("Could not close trade")}));
+ }catch(e){box.innerHTML='<div class="empty">Trade history unavailable: '+esc(e.message)+'</div>'}
+}
+const signalRefresh=$("signal-refresh");if(signalRefresh)signalRefresh.addEventListener("click",()=>loadSignals(true));
+loadSignals();loadTrades();setInterval(()=>{loadSignals();loadTrades()},60000);
++fmt(t.tp2)+' · TP3 
+  box.querySelectorAll(".close-trade").forEach(b=>b.addEventListener("click",async()=>{if(!confirm("Close this tracked trade?"))return;const z=await fetch("/api/trades/"+b.dataset.id+"/close",{method:"POST",headers:{"content-type":"application/json"},body:"{}"});if(z.ok){toast("Trade closed and retained in Neon history");loadTrades()}else toast("Could not close trade")}));
+ }catch(e){box.innerHTML='<div class="empty">Trade history unavailable: '+esc(e.message)+'</div>'}
+}
+const signalRefresh=$("signal-refresh");if(signalRefresh)signalRefresh.addEventListener("click",()=>loadSignals(true));
+loadSignals();loadTrades();setInterval(()=>{loadSignals();loadTrades()},60000);
++fmt(t.tp3)+'</small><small class="'+(move>=0?"positive":"negative")+'">Unrealized move '+pct(move)+' · Est. leveraged ROI '+pct(leveraged)+' (before fees)</small></div><div class="trade-state"><span class="tag">'+esc(t.status)+'</span><button class="outline-btn close-trade" data-id="'+t.id+'">Close trade</button></div></article>'}).join(""):'<div class="empty">No open trades. Add a Futures paper trade or track a qualified signal.</div>';
   box.querySelectorAll(".close-trade").forEach(b=>b.addEventListener("click",async()=>{if(!confirm("Close this tracked trade?"))return;const z=await fetch("/api/trades/"+b.dataset.id+"/close",{method:"POST",headers:{"content-type":"application/json"},body:"{}"});if(z.ok){toast("Trade closed and retained in Neon history");loadTrades()}else toast("Could not close trade")}));
  }catch(e){box.innerHTML='<div class="empty">Trade history unavailable: '+esc(e.message)+'</div>'}
 }
