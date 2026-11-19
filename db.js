@@ -23,6 +23,8 @@ async function initDatabase() {
     closed_at TIMESTAMPTZ, notes TEXT NOT NULL DEFAULT ''
   )`);
   await pool.query("ALTER TABLE tracked_trades ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMPTZ");
+  await pool.query("ALTER TABLE tracked_trades ADD COLUMN IF NOT EXISTS order_type VARCHAR(8) NOT NULL DEFAULT 'MARKET'");
+  await pool.query("ALTER TABLE tracked_trades ADD COLUMN IF NOT EXISTS limit_price NUMERIC(28,12)");
   await pool.query("CREATE INDEX IF NOT EXISTS tracked_trades_open_idx ON tracked_trades (status, opened_at DESC) WHERE closed_at IS NULL");
   await pool.query(`CREATE TABLE IF NOT EXISTS latest_signals (symbol VARCHAR(24) PRIMARY KEY, side VARCHAR(12) NOT NULL, score INTEGER NOT NULL, grade VARCHAR(24), plan JSONB, payload JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
   await pool.query(`CREATE TABLE IF NOT EXISTS trade_events (
@@ -73,10 +75,11 @@ async function readSignals() {
 }
 async function createTrade(t) {
   if(!pool||state!=="connected")throw new Error("Neon database is not connected; trade was not saved");
-  const r=await pool.query(`INSERT INTO tracked_trades(symbol,side,market,entry,quantity,leverage,initial_stop,stop_loss,take_profit_1,take_profit_2,take_profit_3,trail_distance,notes)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12) RETURNING *`,
-    [t.symbol,t.side,t.market||"spot",t.entry,t.quantity||0,t.leverage||1,t.stop,t.tp1,t.tp2,t.tp3,t.trailDistance||0,t.notes||""]);
-  await pool.query("INSERT INTO trade_events(trade_id,event_type,price,details) VALUES($1,'OPENED',$2,$3::jsonb)",[r.rows[0].id,t.entry,JSON.stringify({side:t.side,entry:t.entry,stop:t.stop})]);
+  const orderType=t.orderType||"MARKET",status=orderType==="LIMIT"?"PENDING":"OPEN";
+  const r=await pool.query(`INSERT INTO tracked_trades(symbol,side,market,entry,quantity,leverage,initial_stop,stop_loss,take_profit_1,take_profit_2,take_profit_3,trail_distance,notes,order_type,limit_price,status)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+    [t.symbol,t.side,t.market||"spot",t.entry,t.quantity||0,t.leverage||1,t.stop,t.tp1,t.tp2,t.tp3,t.trailDistance||0,t.notes||"",orderType,orderType==="LIMIT"?t.limitPrice:null,status]);
+  await pool.query("INSERT INTO trade_events(trade_id,event_type,price,details) VALUES($1,$2,$3,$4::jsonb)",[r.rows[0].id,orderType==="LIMIT"?"LIMIT_PLACED":"OPENED",t.entry,JSON.stringify({side:t.side,entry:t.entry,stop:t.stop,orderType,limitPrice:t.limitPrice||null})]);
   return r.rows[0];
 }
 async function listTrades(history=false) {

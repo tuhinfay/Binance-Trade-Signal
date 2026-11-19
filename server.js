@@ -73,12 +73,13 @@ async function marketData(apiPath){
 }
 
 const FUTURES_BYBIT_HOST="https://api.bybit.com";
+let lastFuturesDataSource="BINANCE FUTURES";
 async function futuresMarketData(apiPath){
   const primaryErrors=[];
   try{
     const r=await fetch("https://fapi.binance.com"+apiPath,{headers:{"Accept":"application/json","User-Agent":"Binance-Trade-Signal/3.0"},signal:AbortSignal.timeout(10000)});
     if(!r.ok)throw new Error("Binance Futures HTTP "+r.status);
-    const data=await r.json();return data;
+    const data=await r.json();lastFuturesDataSource="BINANCE USDⓈ-M";return data;
   }catch(e){primaryErrors.push(e.message);}
   try{
     const u=new URL(apiPath,"https://local.invalid"),p=u.searchParams,symbol=p.get("symbol");
@@ -92,7 +93,7 @@ async function futuresMarketData(apiPath){
       if(!r.ok)throw new Error("Bybit linear kline HTTP "+r.status);
       const j=await r.json();if(j.retCode!==0)throw new Error("Bybit linear "+j.retCode+": "+j.retMsg);
       const ivMs=({"1m":60000,"3m":180000,"5m":300000,"15m":900000,"30m":1800000,"1h":3600000,"2h":7200000,"4h":14400000,"6h":21600000,"12h":43200000,"1d":86400000,"1w":604800000}[iv]||60000);
-      return (j.result.list||[]).slice().reverse().map(k=>[k[0],k[1],k[2],k[3],k[4],k[5],String(Number(k[0])+ivMs-1),k[6],"0",null,null]);
+      lastFuturesDataSource="BYBIT LINEAR";return (j.result.list||[]).slice().reverse().map(k=>[k[0],k[1],k[2],k[3],k[4],k[5],String(Number(k[0])+ivMs-1),k[6],"0",null,null]);
     }
     if(u.pathname.endsWith("/ticker/price")){
       endpoint="/v5/market/tickers";
@@ -100,7 +101,7 @@ async function futuresMarketData(apiPath){
       if(!r.ok)throw new Error("Bybit linear ticker HTTP "+r.status);
       const j=await r.json();if(j.retCode!==0)throw new Error("Bybit linear "+j.retCode+": "+j.retMsg);
       const t=j.result.list?.[0];if(!t)throw new Error("Bybit linear pair unavailable: "+symbol);
-      return {symbol:t.symbol,price:t.lastPrice};
+      lastFuturesDataSource="BYBIT LINEAR";return {symbol:t.symbol,price:t.lastPrice};
     }
     throw new Error("Unsupported Futures endpoint "+u.pathname);
   }catch(e){throw new Error("Futures providers unavailable (Binance: "+primaryErrors.join("; ")+ "; Bybit: "+e.message+")");}
@@ -147,7 +148,7 @@ async function scanSignals(force=false){
   return signalScanInFlight;
 }
 const n=x=>Number(x||0);
-function tradeJson(t){return {id:n(t.id),symbol:t.symbol,side:t.side,market:t.market,entry:n(t.entry),quantity:n(t.quantity),leverage:n(t.leverage),stopLoss:n(t.stop_loss),initialStop:n(t.initial_stop),tp1:n(t.take_profit_1),tp2:n(t.take_profit_2),tp3:n(t.take_profit_3),trailDistance:n(t.trail_distance),status:t.status,tp1Hit:t.tp1_hit,tp2Hit:t.tp2_hit,lastPrice:t.last_price==null?null:n(t.last_price),closePrice:t.close_price==null?null:n(t.close_price),closeReason:t.close_reason,openedAt:t.opened_at,closedAt:t.closed_at,notes:t.notes};}
+function tradeJson(t){return {id:n(t.id),symbol:t.symbol,side:t.side,market:t.market,orderType:t.order_type||"MARKET",limitPrice:t.limit_price==null?null:n(t.limit_price),entry:n(t.entry),quantity:n(t.quantity),leverage:n(t.leverage),stopLoss:n(t.stop_loss),initialStop:n(t.initial_stop),tp1:n(t.take_profit_1),tp2:n(t.take_profit_2),tp3:n(t.take_profit_3),trailDistance:n(t.trail_distance),status:t.status,tp1Hit:t.tp1_hit,tp2Hit:t.tp2_hit,lastPrice:t.last_price==null?null:n(t.last_price),closePrice:t.close_price==null?null:n(t.close_price),closeReason:t.close_reason,openedAt:t.opened_at,closedAt:t.closed_at,notes:t.notes};}
 async function monitorTrades(){
   if(monitorInFlight)return monitorInFlight;
   monitorInFlight=(async()=>{
@@ -169,6 +170,15 @@ async function monitorTrades(){
         t.last_price=price;return false;
       }
       try{
+        const livePath="/fapi/v1/ticker/price?symbol="+encodeURIComponent(t.symbol);
+        if(t.status==="PENDING"){
+          const live=await futuresMarketData(livePath),px=Number(live.price);
+          const filled=t.side==="LONG"?px<=n(raw.limit_price):px>=n(raw.limit_price);
+          if(!filled){t.last_price=px;await updateTrade(t);continue;}
+          t.status="OPEN";t.entry=n(raw.limit_price);t.last_price=px;t.last_checked_at=new Date();
+          await recordTradeEvent(t.id,"LIMIT_FILLED",t.entry,{triggerPrice:px,orderType:"LIMIT"});
+          await updateTrade(t);continue;
+        }
         const lastChecked=t.last_checked_at?new Date(t.last_checked_at).getTime():new Date(t.opened_at).getTime();
         const interval=Date.now()-lastChecked>1000*60*1000?"1h":"1m";
         const intervalMs=interval==="1h"?3600000:60000;
@@ -212,11 +222,13 @@ const server=http.createServer(async(req,res)=>{
       const market=String(x.market||"spot").toLowerCase();
       if(!/^[A-Z0-9]{2,20}USDT$/.test(symbol)||!["LONG","SHORT"].includes(side)||!["spot","futures"].includes(market))return sendJson(res,400,{error:"Use a valid USDT pair, LONG/SHORT side and spot/futures market"});
       if(market==="spot"&&side!=="LONG")return sendJson(res,400,{error:"Spot tracking supports LONG only"});
-      const entry=n(x.entry),stop=n(x.stop),tp1=n(x.tp1),tp2=n(x.tp2),tp3=n(x.tp3);
+      let entry=n(x.entry);const limitPrice=n(x.limitPrice),stop=n(x.stop),tp1=n(x.tp1),tp2=n(x.tp2),tp3=n(x.tp3);
       const valid=side==="LONG"?(entry>0&&stop>0&&stop<entry&&tp1>entry&&tp2>tp1&&tp3>tp2):(entry>0&&stop>entry&&tp1<entry&&tp2<tp1&&tp3<tp2&&tp3>0);
       if(!valid)return sendJson(res,400,{error:side==="LONG"?"Invalid LONG plan: stop < entry < TP1 < TP2 < TP3":"Invalid SHORT plan: TP3 < TP2 < TP1 < entry < stop"});
       const leverage=market==="futures"?Math.min(20,Math.max(1,n(x.leverage)||1)):1;
-      const saved=await createTrade({symbol,side,market,entry,stop,tp1,tp2,tp3,quantity:n(x.quantity),leverage,trailDistance:n(x.trailDistance),notes:String(x.notes||"")});
+      if(orderType==="MARKET"&&market==="futures"){const live=await futuresMarketData("/fapi/v1/ticker/price?symbol="+encodeURIComponent(symbol));entry=n(live.price);}
+      if(orderType==="LIMIT"&&(!(limitPrice>0)||Math.abs(entry-limitPrice)>Math.max(1e-8,limitPrice*1e-8)))return sendJson(res,400,{error:"Limit entry must equal the limit price"});
+      const saved=await createTrade({symbol,side,market,entry,stop,tp1,tp2,tp3,quantity:n(x.quantity),leverage,trailDistance:n(x.trailDistance),orderType,limitPrice,notes:String(x.notes||"")});
       return sendJson(res,201,{trade:tradeJson(saved)});
     }catch(e){return sendJson(res,503,{error:"Trade could not be saved to Neon",detail:e.message});}
   }
@@ -224,6 +236,7 @@ const server=http.createServer(async(req,res)=>{
   if(closeMatch&&req.method==="POST"){try{const id=Number(closeMatch[1]);let body="";for await(const c of req)body+=c;const x=JSON.parse(body||"{}");const done=await closeTrade(id,n(x.price)||null,"MANUAL_CLOSE");return sendJson(res,200,{ok:done});}catch(e){return sendJson(res,503,{error:e.message});}}
   const eventMatch=url.pathname.match(/^\/api\/trades\/(\d+)\/events$/);
   if(eventMatch&&req.method==="GET"){try{return sendJson(res,200,await getTradeEvents(Number(eventMatch[1])));}catch(e){return sendJson(res,503,{error:e.message});}}
+  if(url.pathname==="/api/futures/price"){const symbol=(url.searchParams.get("symbol")||"").toUpperCase();if(!/^[A-Z0-9]{2,20}USDT$/.test(symbol))return sendJson(res,400,{error:"Provide a valid USDT perpetual symbol"});try{const p=await futuresMarketData("/fapi/v1/ticker/price?symbol="+encodeURIComponent(symbol));return sendJson(res,200,{symbol,price:n(p.price),source:lastFuturesDataSource,market:"futures"});}catch(e){return sendJson(res,502,{error:"Futures price unavailable",detail:e.message});}}
   if(url.pathname==="/api/pair"){const symbol=(url.searchParams.get("symbol")||"").toUpperCase();if(!/^[A-Z0-9]{2,20}USDT$/.test(symbol))return sendJson(res,400,{error:"Only valid USDT spot pairs are supported"});try{return sendJson(res,200,await getOne(symbol));}catch(e){return sendJson(res,404,{error:"Pair unavailable",detail:e.message});}}
   if(url.pathname==="/api/history"){const symbol=(url.searchParams.get("symbol")||"").toUpperCase();if(!/^[A-Z0-9]{2,20}USDT$/.test(symbol))return sendJson(res,400,{error:"Provide a valid USDT pair"});try{return sendJson(res,200,{symbol,history:await readHistory(symbol)});}catch(e){return sendJson(res,503,{error:e.message});}}
   return serveStatic(req,res,url);

@@ -16,12 +16,20 @@ function atr(h,l,c,n=14) {
 function macdHist(c) {
   const f=ema(c,12),s=ema(c,26),m=f.map((x,i)=>x-s[i]),sig=ema(m,9);return m.map((x,i)=>x-sig[i]).slice(-2);
 }
+function adx(h,l,c,n=14){
+  const tr=[],pdm=[],mdm=[];for(let i=1;i<c.length;i++){const up=h[i]-h[i-1],down=l[i-1]-l[i];pdm.push(up>down&&up>0?up:0);mdm.push(down>up&&down>0?down:0);tr.push(Math.max(h[i]-l[i],Math.abs(h[i]-c[i-1]),Math.abs(l[i]-c[i-1])));}
+  let at=tr.slice(0,n).reduce((a,b)=>a+b,0),p=pdm.slice(0,n).reduce((a,b)=>a+b,0),m=mdm.slice(0,n).reduce((a,b)=>a+b,0),dx=[];
+  for(let i=n;i<tr.length;i++){if(i>n){at=at-at/n+tr[i];p=p-p/n+pdm[i];m=m-m/n+mdm[i];}const plus=100*p/Math.max(at,1e-12),minus=100*m/Math.max(at,1e-12);dx.push(100*Math.abs(plus-minus)/Math.max(plus+minus,1e-12));}
+  return dx.slice(-n).reduce((a,b)=>a+b,0)/Math.max(1,Math.min(n,dx.length));
+}
 function analyzeFrames(symbol, frames, book) {
   const get=(tf,k)=>frames[tf].map(x=>x[k]);
   const c4=get("4h","c"),c1=get("1h","c"),c15=get("15m","c"),c5=get("5m","c");
   const h=get("15m","h"),l=get("15m","l"),v=get("15m","v"),price=c5.at(-1),a=atr(h,l,c15);
   const e200_4=ema(c4,200).at(-1),e50_4=ema(c4,50).at(-1),e50_1=ema(c1,50).at(-1),e20_1=ema(c1,20).at(-1);
   const e9_5=ema(c5,9).at(-1),e20_5=ema(c5,20).at(-1),r=rsi(c15),mh=macdHist(c15);
+  const e20_4=ema(c4,20).at(-1),e50_4h=e50_4,e200_4h=e200_4,adx14=adx(get("1h","h"),get("1h","l"),c1);
+  const vwapRows=frames["15m"].slice(-20),vwapDen=vwapRows.reduce((z,x)=>z+x.v,0),vwap20=vwapDen?vwapRows.reduce((z,x)=>z+((x.h+x.l+x.c)/3)*x.v,0)/vwapDen:null;
   const avgVol=sma(v.slice(0,-1),20),rvol=v.at(-1)/Math.max(avgVol,1e-12);
   const takerRows=frames["15m"].slice(-3).filter(x=>Number.isFinite(x.tb)),taker=takerRows.length?takerRows.reduce((z,x)=>z+x.tb,0)/Math.max(takerRows.reduce((z,x)=>z+x.v,0),1e-12):null;
   const bids=(book.bids||[]).slice(0,20).reduce((z,x)=>z+Number(x[0])*Number(x[1]),0);
@@ -78,7 +86,7 @@ function analyzeFrames(symbol, frames, book) {
     "Insufficient room to resistance":"Wait for a cleaner breakout or better reward/risk"
   }[x]||x));
   const plan=side==="LONG"?{entry:price,entry_zone:[price-0.1*a,price+0.1*a],stop,tp1:price+risk*1.5,tp2:price+risk*2.5,tp3:price+risk*4,rr:[1.5,2.5,4],atr:a,trail_dist:1.2*a}:null;
-  return {symbol,market:"spot",timestamp:Date.now(),price,side,grade:score>=85?"STRONG":score>=75?"GOOD":score>=55?"WATCH":"WAIT",setupStatus,score,breakdown:points,reasons,blocked,nextConditions,timeframes:timeframeStatus,plan,metrics:{rsi:+r.toFixed(1),atr_pct:+(a/price*100).toFixed(3),rvol:+rvol.toFixed(2),spread_pct:+spread.toFixed(4),book_imbalance:+imb.toFixed(3),taker_buy_ratio:taker===null?null:+taker.toFixed(3)},dataQuality:{closedCandlesOnly:true,takerFlowAvailable:taker!==null,bookDepthLevels:20},disclaimer:"Confluence score is not a win probability. Confirm risk before entering."};
+  return {symbol,market:"spot",timestamp:Date.now(),price,side,grade:score>=85?"STRONG":score>=75?"GOOD":score>=55?"WATCH":"WAIT",setupStatus,score,breakdown:points,reasons,blocked,nextConditions,timeframes:timeframeStatus,plan,metrics:{ema20_4h:+e20_4.toPrecision(8),ema50_4h:+e50_4h.toPrecision(8),ema200_4h:+e200_4h.toPrecision(8),adx14:+adx14.toFixed(1),vwap20_15m:vwap20===null?null:+vwap20.toPrecision(8),rsi:+r.toFixed(1),atr_pct:+(a/price*100).toFixed(3),rvol:+rvol.toFixed(2),spread_pct:+spread.toFixed(4),book_imbalance:+imb.toFixed(3),taker_buy_ratio:taker===null?null:+taker.toFixed(3)},dataQuality:{closedCandlesOnly:true,takerFlowAvailable:taker!==null,bookDepthLevels:20},disclaimer:"Confluence score is not a win probability. Confirm risk before entering."};
 }
 async function analyzeSymbol(symbol, getJson) {
   const intervals=["4h","1h","15m","5m"];
