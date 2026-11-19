@@ -172,11 +172,20 @@ async function monitorTrades(){
       try{
         const livePath="/fapi/v1/ticker/price?symbol="+encodeURIComponent(t.symbol);
         if(t.status==="PENDING"){
+          const limit=n(raw.limit_price),lastPendingCheck=t.last_checked_at?new Date(t.last_checked_at).getTime():new Date(t.opened_at).getTime();
+          const path="/fapi/v1/klines?symbol="+encodeURIComponent(t.symbol)+"&interval=1m&startTime="+Math.max(0,lastPendingCheck+1)+"&limit=1000";
+          const candles=await futuresMarketData(path),now=Date.now();
+          const candleTriggered=candles.some(k=>Number(k[6])<now&&(t.side==="LONG"?Number(k[3])<=limit:Number(k[2])>=limit));
           const live=await futuresMarketData(livePath),px=Number(live.price);
-          const filled=t.side==="LONG"?px<=n(raw.limit_price):px>=n(raw.limit_price);
-          if(!filled){t.last_price=px;await updateTrade(t);continue;}
-          t.status="OPEN";t.entry=n(raw.limit_price);t.last_price=px;t.last_checked_at=new Date();
-          await recordTradeEvent(t.id,"LIMIT_FILLED",t.entry,{triggerPrice:px,orderType:"LIMIT"});
+          const quoteTriggered=t.side==="LONG"?px<=limit:px>=limit;
+          if(!candleTriggered&&!quoteTriggered){
+            t.last_price=px;
+            const closed=candles.filter(k=>Number(k[6])<now);
+            if(closed.length)t.last_checked_at=new Date(Number(closed[closed.length-1][6]));
+            await updateTrade(t);continue;
+          }
+          t.status="OPEN";t.entry=limit;t.last_price=px;t.last_checked_at=new Date();
+          await recordTradeEvent(t.id,"LIMIT_FILLED",t.entry,{triggerPrice:px,orderType:"LIMIT",triggerSource:candleTriggered?"closed_1m_candle":"live_quote"});
           await updateTrade(t);continue;
         }
         const lastChecked=t.last_checked_at?new Date(t.last_checked_at).getTime():new Date(t.opened_at).getTime();
