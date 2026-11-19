@@ -25,6 +25,9 @@ async function initDatabase() {
   await pool.query("ALTER TABLE tracked_trades ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMPTZ");
   await pool.query("ALTER TABLE tracked_trades ADD COLUMN IF NOT EXISTS order_type VARCHAR(8) NOT NULL DEFAULT 'MARKET'");
   await pool.query("ALTER TABLE tracked_trades ADD COLUMN IF NOT EXISTS limit_price NUMERIC(28,12)");
+  await pool.query("ALTER TABLE tracked_trades ADD COLUMN IF NOT EXISTS margin_allocated NUMERIC(28,12) NOT NULL DEFAULT 0");
+  await pool.query("CREATE TABLE IF NOT EXISTS demo_account (id SMALLINT PRIMARY KEY CHECK (id=1), starting_balance NUMERIC(28,8) NOT NULL DEFAULT 1000, cash_balance NUMERIC(28,8) NOT NULL DEFAULT 1000, realized_pnl NUMERIC(28,8) NOT NULL DEFAULT 0, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
+  await pool.query("INSERT INTO demo_account(id,starting_balance,cash_balance,realized_pnl) VALUES(1,1000,1000,0) ON CONFLICT(id) DO NOTHING");
   await pool.query("CREATE INDEX IF NOT EXISTS tracked_trades_open_idx ON tracked_trades (status, opened_at DESC) WHERE closed_at IS NULL");
   await pool.query(`CREATE TABLE IF NOT EXISTS latest_signals (symbol VARCHAR(24) PRIMARY KEY, side VARCHAR(12) NOT NULL, score INTEGER NOT NULL, grade VARCHAR(24), plan JSONB, payload JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
   await pool.query(`CREATE TABLE IF NOT EXISTS trade_events (
@@ -75,12 +78,30 @@ async function readSignals() {
 }
 async function createTrade(t) {
   if(!pool||state!=="connected")throw new Error("Neon database is not connected; trade was not saved");
-  const orderType=t.orderType||"MARKET",status=orderType==="LIMIT"?"PENDING":"OPEN";
-  const r=await pool.query(`INSERT INTO tracked_trades(symbol,side,market,entry,quantity,leverage,initial_stop,stop_loss,take_profit_1,take_profit_2,take_profit_3,trail_distance,notes,order_type,limit_price,status)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
-    [t.symbol,t.side,t.market||"spot",t.entry,t.quantity||0,t.leverage||1,t.stop,t.tp1,t.tp2,t.tp3,t.trailDistance||0,t.notes||"",orderType,orderType==="LIMIT"?t.limitPrice:null,status]);
-  await pool.query("INSERT INTO trade_events(trade_id,event_type,price,details) VALUES($1,$2,$3,$4::jsonb)",[r.rows[0].id,orderType==="LIMIT"?"LIMIT_PLACED":"OPENED",t.entry,JSON.stringify({side:t.side,entry:t.entry,stop:t.stop,orderType,limitPrice:t.limitPrice||null})]);
-  return r.rows[0];
+  const client=await pool.connect();
+  try{
+    await client.query("BEGIN");
+    const acct=await client.query("SELECT cash_balance FROM demo_account WHERE id=1 FOR UPDATE");
+    if(!acct.rowCount)throw new Error("Demo account is not initialized");
+    const cash=Number(acct.rows[0].cash_balance),margin=Number(t.margin||0);
+    if(!(margin>0)||margin>cash)throw new Error("Insufficient demo liquidity. Available $"+cash.toFixed(2));
+    const orderType=t.orderType||"MARKET",status=orderType==="LIMIT"?"PENDING":"OPEN";
+    const r=await client.query(`INSERT INTO tracked_trades(symbol,side,market,entry,quantity,leverage,initial_stop,stop_loss,take_profit_1,take_profit_2,take_profit_3,trail_distance,notes,order_type,limit_price,status,margin_allocated)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
+      [t.symbol,t.side,t.market||"spot",t.entry,t.quantity,t.leverage||1,t.stop,t.tp1,t.tp2,t.tp3,t.trailDistance||0,t.notes||"",orderType,orderType==="LIMIT"?t.limitPrice:null,status,margin]);
+    await client.query("UPDATE demo_account SET cash_balance=cash_balance-$1,updated_at=NOW() WHERE id=1",[margin]);
+    await client.query("INSERT INTO trade_events(trade_id,event_type,price,details) VALUES($1,$2,$3,$4::jsonb)",[r.rows[0].id,orderType==="LIMIT"?"LIMIT_PLACED":"OPENED",t.entry,JSON.stringify({side:t.side,entry:t.entry,orderType,limitPrice:t.limitPrice||null,margin,quantity:t.quantity,leverage:t.leverage})]);
+    await client.query("COMMIT");return r.rows[0];
+  }catch(e){await client.query("ROLLBACK");throw e;}finally{client.release();}
+}
+async function getDemoAccount(){
+  if(!pool||state!=="connected")throw new Error("Demo account unavailable");
+  const r=await pool.query(`SELECT a.starting_balance,a.cash_balance,a.realized_pnl,
+    COALESCE(SUM(CASE WHEN t.closed_at IS NULL THEN t.margin_allocated ELSE 0 END),0) AS margin_used,
+    COALESCE(SUM(CASE WHEN t.closed_at IS NULL AND t.status<>'PENDING' THEN ((COALESCE(t.last_price,t.entry)-t.entry)*t.quantity*CASE WHEN t.side='LONG' THEN 1 ELSE -1 END) ELSE 0 END),0) AS unrealized_pnl
+    FROM demo_account a LEFT JOIN tracked_trades t ON t.closed_at IS NULL WHERE a.id=1 GROUP BY a.id,a.starting_balance,a.cash_balance,a.realized_pnl`);
+  const x=r.rows[0],num=v=>Number(v||0),available=num(x.cash_balance),margin=num(x.margin_used),unrealized=num(x.unrealized_pnl);
+  return {currency:"USD",startingBalance:num(x.starting_balance),availableBalance:available,marginUsed:margin,unrealizedPnl:unrealized,realizedPnl:num(x.realized_pnl),equity:available+margin+unrealized,totalPnl:num(x.realized_pnl)+unrealized};
 }
 async function listTrades(history=false) {
   if(!pool||state!=="connected")return [];
@@ -95,13 +116,21 @@ async function updateTrade(t) {
     [t.id,t.stop_loss,t.last_price,t.tp1_hit,t.tp2_hit,t.status,t.last_checked_at||null]);
 }
 async function closeTrade(id,price,reason) {
-  const r=await pool.query(`UPDATE tracked_trades SET status='CLOSED',close_price=$2,close_reason=$3,closed_at=NOW(),updated_at=NOW()
-    WHERE id=$1 AND closed_at IS NULL RETURNING id`,[id,price,reason]);
-  if(r.rowCount)await recordTradeEvent(id,reason,price,{closed:true});
-  return r.rowCount===1;
+  const client=await pool.connect();
+  try{
+    await client.query("BEGIN");
+    const q=await client.query("SELECT * FROM tracked_trades WHERE id=$1 AND closed_at IS NULL FOR UPDATE",[id]);
+    if(!q.rowCount){await client.query("ROLLBACK");return false;}
+    const t=q.rows[0],exitPrice=Number(price)||Number(t.last_price)||Number(t.entry),direction=t.side==="LONG"?1:-1;
+    const pnl=t.status==="PENDING"?0:(exitPrice-Number(t.entry))*Number(t.quantity)*direction,margin=Number(t.margin_allocated||0);
+    await client.query("UPDATE tracked_trades SET status='CLOSED',close_price=$2,close_reason=$3,closed_at=NOW(),updated_at=NOW() WHERE id=$1",[id,exitPrice,reason]);
+    await client.query("UPDATE demo_account SET cash_balance=cash_balance+$1+$2,realized_pnl=realized_pnl+$2,updated_at=NOW() WHERE id=1",[margin,pnl]);
+    await client.query("INSERT INTO trade_events(trade_id,event_type,price,details) VALUES($1,$2,$3,$4::jsonb)",[id,reason,exitPrice,JSON.stringify({closed:true,realizedPnl:pnl,marginReleased:margin})]);
+    await client.query("COMMIT");return true;
+  }catch(e){await client.query("ROLLBACK");throw e;}finally{client.release();}
 }
 async function getTradeEvents(id) {
   const r=await pool.query("SELECT event_type,price,details,created_at FROM trade_events WHERE trade_id=$1 ORDER BY created_at",[id]);
   return r.rows;
 }
-module.exports={initDatabase,databaseStatus,saveSnapshots,readHistory,saveSignal,readSignals,createTrade,listTrades,recordTradeEvent,updateTrade,closeTrade,getTradeEvents};
+module.exports={initDatabase,databaseStatus,saveSnapshots,readHistory,saveSignal,readSignals,createTrade,listTrades,recordTradeEvent,updateTrade,closeTrade,getTradeEvents,getDemoAccount};
