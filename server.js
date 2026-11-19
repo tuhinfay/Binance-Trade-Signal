@@ -72,6 +72,39 @@ async function marketData(apiPath){
     catch(backup){console.error("[market-data] Bybit fallback unavailable:",backup.message);throw new Error("Primary Binance failed ("+primary.message+"); Bybit fallback failed ("+backup.message+")");}}
 }
 
+const FUTURES_BYBIT_HOST="https://api.bybit.com";
+async function futuresMarketData(apiPath){
+  const primaryErrors=[];
+  try{
+    const r=await fetch("https://fapi.binance.com"+apiPath,{headers:{"Accept":"application/json","User-Agent":"Binance-Trade-Signal/3.0"},signal:AbortSignal.timeout(10000)});
+    if(!r.ok)throw new Error("Binance Futures HTTP "+r.status);
+    const data=await r.json();return data;
+  }catch(e){primaryErrors.push(e.message);}
+  try{
+    const u=new URL(apiPath,"https://local.invalid"),p=u.searchParams,symbol=p.get("symbol");
+    const params=new URLSearchParams({category:"linear",symbol});
+    let endpoint;
+    if(u.pathname.endsWith("/klines")){
+      endpoint="/v5/market/kline";const iv=p.get("interval");
+      params.set("interval",intervalMap[iv]||iv);params.set("limit",p.get("limit")||"200");
+      if(p.has("startTime"))params.set("start",p.get("startTime"));
+      const r=await fetch(FUTURES_BYBIT_HOST+endpoint+"?"+params,{headers:{"Accept":"application/json"},signal:AbortSignal.timeout(10000)});
+      if(!r.ok)throw new Error("Bybit linear kline HTTP "+r.status);
+      const j=await r.json();if(j.retCode!==0)throw new Error("Bybit linear "+j.retCode+": "+j.retMsg);
+      const ivMs=({"1m":60000,"3m":180000,"5m":300000,"15m":900000,"30m":1800000,"1h":3600000,"2h":7200000,"4h":14400000,"6h":21600000,"12h":43200000,"1d":86400000,"1w":604800000}[iv]||60000);
+      return (j.result.list||[]).slice().reverse().map(k=>[k[0],k[1],k[2],k[3],k[4],k[5],String(Number(k[0])+ivMs-1),k[6],"0",null,null]);
+    }
+    if(u.pathname.endsWith("/ticker/price")){
+      endpoint="/v5/market/tickers";
+      const r=await fetch(FUTURES_BYBIT_HOST+endpoint+"?"+params,{headers:{"Accept":"application/json"},signal:AbortSignal.timeout(10000)});
+      if(!r.ok)throw new Error("Bybit linear ticker HTTP "+r.status);
+      const j=await r.json();if(j.retCode!==0)throw new Error("Bybit linear "+j.retCode+": "+j.retMsg);
+      const t=j.result.list?.[0];if(!t)throw new Error("Bybit linear pair unavailable: "+symbol);
+      return {symbol:t.symbol,price:t.lastPrice};
+    }
+    throw new Error("Unsupported Futures endpoint "+u.pathname);
+  }catch(e){throw new Error("Futures providers unavailable (Binance: "+primaryErrors.join("; ")+ "; Bybit: "+e.message+")");}
+}
 async function getOne(symbol,hint){
   const t=hint||await marketData("/api/v3/ticker/24hr?symbol="+encodeURIComponent(symbol));
   let open=Number(t.openPrice),sessionChange=Number(t.priceChangePercent);
@@ -123,10 +156,12 @@ async function monitorTrades(){
       const t={...raw,id:n(raw.id),entry:n(raw.entry),stop_loss:n(raw.stop_loss),initial_stop:n(raw.initial_stop),tp1:n(raw.take_profit_1),tp2:n(raw.take_profit_2),tp3:n(raw.take_profit_3),trail_distance:n(raw.trail_distance),tp1_hit:raw.tp1_hit,tp2_hit:raw.tp2_hit,last_checked_at:raw.last_checked_at};
       const side=t.side==="LONG"?1:-1;
       async function applyPrice(price,high=price,low=price){
-        if((low-t.stop_loss)*side<=0){await closeTrade(t.id,t.stop_loss,"STOP_LOSS");t.status="CLOSED";return true;}
-        if(t.tp1&&!t.tp1_hit&&(high-t.tp1)*side>=0){t.tp1_hit=true;t.status="TP1_HIT";const old=t.stop_loss;t.stop_loss=t.entry;await recordTradeEvent(t.id,"TP1_HIT",t.tp1,{oldStop:old,newStop:t.stop_loss});}
-        if(t.tp2&&!t.tp2_hit&&(high-t.tp2)*side>=0){t.tp2_hit=true;t.status="TP2_HIT";const old=t.stop_loss;t.stop_loss=t.tp1||t.entry;await recordTradeEvent(t.id,"TP2_HIT",t.tp2,{oldStop:old,newStop:t.stop_loss});}
-        if(t.tp3&&(high-t.tp3)*side>=0){await closeTrade(t.id,t.tp3,"TAKE_PROFIT_3");t.status="CLOSED";return true;}
+        // If a single OHLC candle touches both stop and target, process the stop first (conservative; intrabar order is unknowable).
+        const stopTouched=side===1?low<=t.stop_loss:high>=t.stop_loss;
+        if(stopTouched){await closeTrade(t.id,t.stop_loss,"STOP_LOSS");t.status="CLOSED";return true;}
+        if(t.tp1&&!t.tp1_hit&&(side===1?high>=t.tp1:low<=t.tp1)){t.tp1_hit=true;t.status="TP1_HIT";const old=t.stop_loss;t.stop_loss=t.entry;await recordTradeEvent(t.id,"TP1_HIT",t.tp1,{oldStop:old,newStop:t.stop_loss});}
+        if(t.tp2&&!t.tp2_hit&&(side===1?high>=t.tp2:low<=t.tp2)){t.tp2_hit=true;t.status="TP2_HIT";const old=t.stop_loss;t.stop_loss=t.tp1||t.entry;await recordTradeEvent(t.id,"TP2_HIT",t.tp2,{oldStop:old,newStop:t.stop_loss});}
+        if(t.tp3&&(side===1?high>=t.tp3:low<=t.tp3)){await closeTrade(t.id,t.tp3,"TAKE_PROFIT_3");t.status="CLOSED";return true;}
         if(t.trail_distance>0&&Math.abs(price-t.entry)>=Math.abs(t.initial_stop-t.entry)){
           const candidate=price-side*t.trail_distance;
           if((candidate-t.stop_loss)*side>0){t.stop_loss=candidate;await recordTradeEvent(t.id,"TRAILING_STOP",price,{newStop:candidate});}
@@ -137,7 +172,7 @@ async function monitorTrades(){
         const lastChecked=t.last_checked_at?new Date(t.last_checked_at).getTime():new Date(t.opened_at).getTime();
         const interval=Date.now()-lastChecked>1000*60*1000?"1h":"1m";
         const intervalMs=interval==="1h"?3600000:60000;
-        const candles=await marketData("/api/v3/klines?symbol="+encodeURIComponent(t.symbol)+"&interval="+interval+"&startTime="+Math.max(0,lastChecked+1)+"&limit=1000");
+        const candlePath=(t.market==="futures"?"/fapi/v1/klines":"/api/v3/klines")+"?symbol="+encodeURIComponent(t.symbol)+"&interval="+interval+"&startTime="+Math.max(0,lastChecked+1)+"&limit=1000";\n        const candles=await (t.market==="futures"?futuresMarketData(candlePath):marketData(candlePath));
         for(const k of candles){
           if(Number(k[6])>=Date.now())continue;
           const high=Number(k[2]),low=Number(k[3]),close=Number(k[4]);
@@ -145,7 +180,7 @@ async function monitorTrades(){
           t.last_checked_at=new Date(Number(k[6]));
         }
         if(t.last_checked_at&&t.status!=="CLOSED"){
-          const p=await marketData("/api/v3/ticker/price?symbol="+encodeURIComponent(t.symbol)),price=Number(p.price);
+          const pricePath=(t.market==="futures"?"/fapi/v1/ticker/price":"/api/v3/ticker/price")+"?symbol="+encodeURIComponent(t.symbol);\n          const p=await (t.market==="futures"?futuresMarketData(pricePath):marketData(pricePath)),price=Number(p.price);
           if(await applyPrice(price))continue;
           await updateTrade(t);
         }else if(t.status!=="CLOSED"){
@@ -171,10 +206,14 @@ const server=http.createServer(async(req,res)=>{
   if(url.pathname==="/api/trades"&&req.method==="GET"){try{return sendJson(res,200,(await listTrades(url.searchParams.get("history")==="1")).map(tradeJson));}catch(e){return sendJson(res,503,{error:e.message});}}
   if(url.pathname==="/api/trades"&&req.method==="POST"){
     try{let body="";for await(const chunk of req)body+=chunk;const x=JSON.parse(body||"{}");const symbol=String(x.symbol||"").toUpperCase(),side=String(x.side||"").toUpperCase();
-      if(!/^[A-Z0-9]{2,20}USDT$/.test(symbol)||side!=="LONG")return sendJson(res,400,{error:"Spot tracking currently supports valid USDT pairs and LONG only"});
+      const market=String(x.market||"spot").toLowerCase();
+      if(!/^[A-Z0-9]{2,20}USDT$/.test(symbol)||!["LONG","SHORT"].includes(side)||!["spot","futures"].includes(market))return sendJson(res,400,{error:"Use a valid USDT pair, LONG/SHORT side and spot/futures market"});
+      if(market==="spot"&&side!=="LONG")return sendJson(res,400,{error:"Spot tracking supports LONG only"});
       const entry=n(x.entry),stop=n(x.stop),tp1=n(x.tp1),tp2=n(x.tp2),tp3=n(x.tp3);
-      if(!(entry>0&&stop>0&&stop<entry&&tp1>entry&&tp2>tp1&&tp3>tp2))return sendJson(res,400,{error:"Invalid LONG trade plan: require stop < entry < TP1 < TP2 < TP3"});
-      const saved=await createTrade({symbol,side,market:"spot",entry,stop,tp1,tp2,tp3,quantity:n(x.quantity),leverage:1,trailDistance:n(x.trailDistance),notes:String(x.notes||"")});
+      const valid=side==="LONG"?(entry>0&&stop>0&&stop<entry&&tp1>entry&&tp2>tp1&&tp3>tp2):(entry>0&&stop>entry&&tp1<entry&&tp2<tp1&&tp3<tp2&&tp3>0);
+      if(!valid)return sendJson(res,400,{error:side==="LONG"?"Invalid LONG plan: stop < entry < TP1 < TP2 < TP3":"Invalid SHORT plan: TP3 < TP2 < TP1 < entry < stop"});
+      const leverage=market==="futures"?Math.min(20,Math.max(1,n(x.leverage)||1)):1;
+      const saved=await createTrade({symbol,side,market,entry,stop,tp1,tp2,tp3,quantity:n(x.quantity),leverage,trailDistance:n(x.trailDistance),notes:String(x.notes||"")});
       return sendJson(res,201,{trade:tradeJson(saved)});
     }catch(e){return sendJson(res,503,{error:"Trade could not be saved to Neon",detail:e.message});}
   }
