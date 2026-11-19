@@ -91,39 +91,3 @@ if(paperForm)paperForm.addEventListener("submit",async e=>{
 });
 const signalRefresh=$("signal-refresh");if(signalRefresh)signalRefresh.addEventListener("click",()=>loadSignals(true));
 loadSignals();loadTrades();setInterval(()=>{loadSignals();loadTrades()},60000);
-+fmt(t.entry)+' · Last 
-  box.querySelectorAll(".close-trade").forEach(b=>b.addEventListener("click",async()=>{if(!confirm("Close this tracked trade?"))return;const z=await fetch("/api/trades/"+b.dataset.id+"/close",{method:"POST",headers:{"content-type":"application/json"},body:"{}"});if(z.ok){toast("Trade closed and retained in Neon history");loadTrades()}else toast("Could not close trade")}));
- }catch(e){box.innerHTML='<div class="empty">Trade history unavailable: '+esc(e.message)+'</div>'}
-}
-const signalRefresh=$("signal-refresh");if(signalRefresh)signalRefresh.addEventListener("click",()=>loadSignals(true));
-loadSignals();loadTrades();setInterval(()=>{loadSignals();loadTrades()},60000);
-+fmt(last)+' · '+fmt(t.leverage||1)+'x</small><small>SL 
-  box.querySelectorAll(".close-trade").forEach(b=>b.addEventListener("click",async()=>{if(!confirm("Close this tracked trade?"))return;const z=await fetch("/api/trades/"+b.dataset.id+"/close",{method:"POST",headers:{"content-type":"application/json"},body:"{}"});if(z.ok){toast("Trade closed and retained in Neon history");loadTrades()}else toast("Could not close trade")}));
- }catch(e){box.innerHTML='<div class="empty">Trade history unavailable: '+esc(e.message)+'</div>'}
-}
-const signalRefresh=$("signal-refresh");if(signalRefresh)signalRefresh.addEventListener("click",()=>loadSignals(true));
-loadSignals();loadTrades();setInterval(()=>{loadSignals();loadTrades()},60000);
-+fmt(t.stopLoss)+' · TP1 
-  box.querySelectorAll(".close-trade").forEach(b=>b.addEventListener("click",async()=>{if(!confirm("Close this tracked trade?"))return;const z=await fetch("/api/trades/"+b.dataset.id+"/close",{method:"POST",headers:{"content-type":"application/json"},body:"{}"});if(z.ok){toast("Trade closed and retained in Neon history");loadTrades()}else toast("Could not close trade")}));
- }catch(e){box.innerHTML='<div class="empty">Trade history unavailable: '+esc(e.message)+'</div>'}
-}
-const signalRefresh=$("signal-refresh");if(signalRefresh)signalRefresh.addEventListener("click",()=>loadSignals(true));
-loadSignals();loadTrades();setInterval(()=>{loadSignals();loadTrades()},60000);
-+fmt(t.tp1)+' · TP2 
-  box.querySelectorAll(".close-trade").forEach(b=>b.addEventListener("click",async()=>{if(!confirm("Close this tracked trade?"))return;const z=await fetch("/api/trades/"+b.dataset.id+"/close",{method:"POST",headers:{"content-type":"application/json"},body:"{}"});if(z.ok){toast("Trade closed and retained in Neon history");loadTrades()}else toast("Could not close trade")}));
- }catch(e){box.innerHTML='<div class="empty">Trade history unavailable: '+esc(e.message)+'</div>'}
-}
-const signalRefresh=$("signal-refresh");if(signalRefresh)signalRefresh.addEventListener("click",()=>loadSignals(true));
-loadSignals();loadTrades();setInterval(()=>{loadSignals();loadTrades()},60000);
-+fmt(t.tp2)+' · TP3 
-  box.querySelectorAll(".close-trade").forEach(b=>b.addEventListener("click",async()=>{if(!confirm("Close this tracked trade?"))return;const z=await fetch("/api/trades/"+b.dataset.id+"/close",{method:"POST",headers:{"content-type":"application/json"},body:"{}"});if(z.ok){toast("Trade closed and retained in Neon history");loadTrades()}else toast("Could not close trade")}));
- }catch(e){box.innerHTML='<div class="empty">Trade history unavailable: '+esc(e.message)+'</div>'}
-}
-const signalRefresh=$("signal-refresh");if(signalRefresh)signalRefresh.addEventListener("click",()=>loadSignals(true));
-loadSignals();loadTrades();setInterval(()=>{loadSignals();loadTrades()},60000);
-+fmt(t.tp3)+'</small><small class="'+(move>=0?"positive":"negative")+'">Unrealized move '+pct(move)+' · Est. leveraged ROI '+pct(leveraged)+' (before fees)</small></div><div class="trade-state"><span class="tag">'+esc(t.status)+'</span><button class="outline-btn close-trade" data-id="'+t.id+'">Close trade</button></div></article>'}).join(""):'<div class="empty">No open trades. Add a Futures paper trade or track a qualified signal.</div>';
-  box.querySelectorAll(".close-trade").forEach(b=>b.addEventListener("click",async()=>{if(!confirm("Close this tracked trade?"))return;const z=await fetch("/api/trades/"+b.dataset.id+"/close",{method:"POST",headers:{"content-type":"application/json"},body:"{}"});if(z.ok){toast("Trade closed and retained in Neon history");loadTrades()}else toast("Could not close trade")}));
- }catch(e){box.innerHTML='<div class="empty">Trade history unavailable: '+esc(e.message)+'</div>'}
-}
-const signalRefresh=$("signal-refresh");if(signalRefresh)signalRefresh.addEventListener("click",()=>loadSignals(true));
-loadSignals();loadTrades();setInterval(()=>{loadSignals();loadTrades()},60000);
