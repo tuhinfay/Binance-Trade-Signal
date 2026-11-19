@@ -62,27 +62,35 @@ async function trackSignal(symbol,rows){
   toast(symbol+" trade saved in Neon");loadTrades();
  }catch(e){toast("Trade not saved: "+e.message)}
 }
+async function loadDemoAccount(){
+ const r=await fetch("/api/demo-account",{cache:"no-store"}),d=await r.json();if(!r.ok)throw new Error(d.error||"Demo wallet unavailable");
+ const money=v=>(Number(v)<0?"-$":"$")+Math.abs(Number(v)).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+ $("demo-available").textContent=money(d.availableBalance);$("demo-margin").textContent=money(d.marginUsed);$("demo-unrealized").textContent=money(d.unrealizedPnl);$("demo-realized").textContent=money(d.realizedPnl);$("demo-equity").textContent=money(d.equity);
+ $("demo-unrealized").className=d.unrealizedPnl>=0?"positive":"negative";$("demo-realized").className=d.realizedPnl>=0?"positive":"negative";$("demo-equity").className=d.totalPnl>=0?"positive":"negative";
+}
 async function loadTrades(){
  const box=$("trades");if(!box)return;
  try{
+  await loadDemoAccount();
   const r=await fetch("/api/trades",{cache:"no-store"}),rows=await r.json();if(!r.ok)throw new Error(rows.error||"Trade list unavailable");
   const html=rows.map(t=>{
    const last=Number(t.lastPrice||t.entry),direction=t.side==="LONG"?1:-1;
    const move=(last-Number(t.entry))/Number(t.entry)*100*direction;
-   const leveraged=move*Number(t.leverage||1);
+   const roi=move*Number(t.leverage||1),pnl=(last-Number(t.entry))*Number(t.quantity||0)*direction;
+   const order=t.orderType==="LIMIT"?"LIMIT · Trigger $"+fmt(t.limitPrice||t.entry):"MARKET";
    return '<article class="trade-row"><div><b>'+esc(t.symbol)+' · '+esc(t.side)+' · '+esc((t.market||"spot").toUpperCase())+'</b>'+
-    '<small>Entry $'+fmt(t.entry)+' · Last $'+fmt(last)+' · '+fmt(t.leverage||1)+'x</small>'+
+    '<small>'+order+' · Entry $'+fmt(t.entry)+' · Last $'+fmt(last)+' · Margin $'+fmt(t.margin||0)+' · '+fmt(t.leverage||1)+'x</small>'+
     '<small>SL $'+fmt(t.stopLoss)+' · TP1 $'+fmt(t.tp1)+' · TP2 $'+fmt(t.tp2)+' · TP3 $'+fmt(t.tp3)+'</small>'+
-    '<small class="'+(move>=0?"positive":"negative")+'">Unrealized move '+pct(move)+' · Est. leveraged ROI '+pct(leveraged)+' (before fees)</small></div>'+
+    '<small class="'+(pnl>=0?"positive":"negative")+'">Unrealized P/L '+(pnl>=0?"+$":"-$")+fmt(Math.abs(pnl))+' · Move '+pct(move)+' · Est. ROI '+pct(roi)+'</small></div>'+
     '<div class="trade-state"><span class="tag">'+esc(t.status)+'</span><button class="outline-btn close-trade" data-id="'+t.id+'">Close trade</button></div></article>';
   }).join("");
-  box.innerHTML=rows.length?html:'<div class="empty">No open trades. Add a Futures paper trade or track a qualified signal.</div>';
+  box.innerHTML=rows.length?html:'<div class="empty">No open trades. Your $1,000 demo wallet is ready.</div>';
   box.querySelectorAll(".close-trade").forEach(b=>b.addEventListener("click",async()=>{
-   if(!confirm("Close this tracked trade?"))return;
+   if(!confirm("Close this paper trade?"))return;
    const z=await fetch("/api/trades/"+b.dataset.id+"/close",{method:"POST",headers:{"content-type":"application/json"},body:"{}"});
-   if(z.ok){toast("Trade closed and retained in Neon history");loadTrades()}else toast("Could not close trade");
+   if(z.ok){toast("Trade closed · P/L booked to demo wallet");loadTrades()}else toast("Could not close trade");
   }));
- }catch(e){box.innerHTML='<div class="empty">Trade history unavailable: '+esc(e.message)+'</div>'}
+ }catch(e){box.innerHTML='<div class="empty">Demo account / trade list unavailable: '+esc(e.message)+'</div>'}
 }
 async function refreshTicketQuote(){
  const symbol=$("ticket-symbol").value.trim().toUpperCase();if(!/^[A-Z0-9]{2,20}USDT$/.test(symbol))throw new Error("Enter a valid USDT perpetual symbol");
@@ -96,7 +104,7 @@ $("ticket-type").addEventListener("change",async()=>{const limit=$("ticket-type"
 $("ticket-side").addEventListener("change",()=>applyRiskTemplate(Number($("ticket-price").value)));
 $("ticket-symbol").addEventListener("change",async()=>{try{const p=await refreshTicketQuote();applyRiskTemplate(p)}catch(e){$("ticket-quote").textContent=e.message}});
 $("ticket-refresh").addEventListener("click",async()=>{try{const p=await refreshTicketQuote();if($("ticket-type").value==="MARKET")applyRiskTemplate(p);toast("Futures quote refreshed")}catch(e){toast(e.message)}});
-$("smart-ticket-form").addEventListener("submit",async e=>{e.preventDefault();try{const type=$("ticket-type").value,price=type==="MARKET"?await refreshTicketQuote():Number($("ticket-price").value);if(type==="MARKET")$("ticket-price").value=price;const payload={symbol:$("ticket-symbol").value.trim().toUpperCase(),side:$("ticket-side").value,market:"futures",orderType:type,entry:price,limitPrice:type==="LIMIT"?price:null,stop:Number($("ticket-stop").value),tp1:Number($("ticket-tp1").value),tp2:Number($("ticket-tp2").value),tp3:Number($("ticket-tp3").value),leverage:Number($("ticket-leverage").value),notes:"Smart Futures paper ticket"};const r=await fetch("/api/trades",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload)}),d=await r.json();if(!r.ok)throw new Error(d.detail||d.error||"Could not save paper order");toast(type==="LIMIT"?"Limit paper order saved as PENDING":"Market paper trade opened");loadTrades()}catch(err){toast("Paper order rejected: "+err.message)}});
+$("smart-ticket-form").addEventListener("submit",async e=>{e.preventDefault();try{const type=$("ticket-type").value,price=type==="MARKET"?await refreshTicketQuote():Number($("ticket-price").value);if(type==="MARKET")$("ticket-price").value=price;const payload={symbol:$("ticket-symbol").value.trim().toUpperCase(),side:$("ticket-side").value,market:"futures",orderType:type,entry:price,limitPrice:type==="LIMIT"?price:null,stop:Number($("ticket-stop").value),tp1:Number($("ticket-tp1").value),tp2:Number($("ticket-tp2").value),tp3:Number($("ticket-tp3").value),leverage:Number($("ticket-leverage").value),margin:Number($("ticket-margin").value),notes:"Smart Futures paper ticket"};const r=await fetch("/api/trades",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload)}),d=await r.json();if(!r.ok)throw new Error(d.detail||d.error||"Could not save paper order");toast(type==="LIMIT"?"Limit paper order saved as PENDING":"Market paper trade opened");loadTrades()}catch(err){toast("Paper order rejected: "+err.message)}});
 refreshTicketQuote().then(applyRiskTemplate).catch(e=>$("ticket-quote").textContent=e.message);
 const signalRefresh=$("signal-refresh");if(signalRefresh)signalRefresh.addEventListener("click",()=>loadSignals(true));
-loadSignals();loadTrades();setInterval(()=>{loadSignals();loadTrades()},60000);
+loadSignals();loadTrades();setInterval(()=>{loadTrades()},15000);setInterval(()=>{loadSignals()},180000);
