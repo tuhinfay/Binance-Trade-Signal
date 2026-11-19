@@ -1,7 +1,7 @@
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
-const { initDatabase, databaseStatus, saveSnapshots, readHistory, saveSignal, readSignals, createTrade, listTrades, recordTradeEvent, updateTrade, closeTrade, getTradeEvents } = require("./db");
+const { initDatabase, databaseStatus, saveSnapshots, readHistory, saveSignal, readSignals, createTrade, listTrades, recordTradeEvent, updateTrade, closeTrade, getTradeEvents, getDemoAccount } = require("./db");
 const { analyzeSymbol } = require("./signals");
 
 const PORT=Number(process.env.PORT||10000), ROOT=path.join(__dirname,"public");
@@ -226,6 +226,7 @@ const server=http.createServer(async(req,res)=>{
   if(url.pathname==="/api/market"){try{return sendJson(res,200,await getMarket());}catch(e){return sendJson(res,502,{error:"Unable to load market data from all providers",detail:e.message});}}
   if(url.pathname==="/api/signals"){try{await monitorTrades();const signals=await scanSignals(url.searchParams.get("refresh")==="1");return sendJson(res,200,{updatedAt:new Date(lastSignalScanAt||Date.now()).toISOString(),source:lastDataSource,signals});}catch(e){try{const saved=await readSignals();if(saved.length)return sendJson(res,200,{stale:true,error:"Live scan unavailable; showing last saved signals",signals:saved});}catch(_){}return sendJson(res,502,{error:"Signal scan unavailable",detail:e.message});}}
   if(url.pathname==="/api/trades"&&req.method==="GET"){try{return sendJson(res,200,(await listTrades(url.searchParams.get("history")==="1")).map(tradeJson));}catch(e){return sendJson(res,503,{error:e.message});}}
+  if(url.pathname==="/api/demo-account"&&req.method==="GET"){try{return sendJson(res,200,await getDemoAccount());}catch(e){return sendJson(res,503,{error:e.message});}}
   if(url.pathname==="/api/trades"&&req.method==="POST"){
     try{let body="";for await(const chunk of req)body+=chunk;const x=JSON.parse(body||"{}");const symbol=String(x.symbol||"").toUpperCase(),side=String(x.side||"").toUpperCase();
       const market=String(x.market||"spot").toLowerCase();
@@ -240,7 +241,9 @@ const server=http.createServer(async(req,res)=>{
       const valid=side==="LONG"?(entry>0&&stop>0&&stop<entry&&tp1>entry&&tp2>tp1&&tp3>tp2):(entry>0&&stop>entry&&tp1<entry&&tp2<tp1&&tp3<tp2&&tp3>0);
       if(!valid)return sendJson(res,400,{error:side==="LONG"?"Invalid LONG plan: stop < entry < TP1 < TP2 < TP3":"Invalid SHORT plan: TP3 < TP2 < TP1 < entry < stop"});
       const leverage=market==="futures"?Math.min(20,Math.max(1,n(x.leverage)||1)):1;
-      const saved=await createTrade({symbol,side,market,entry,stop,tp1,tp2,tp3,quantity:n(x.quantity),leverage,trailDistance:n(x.trailDistance),orderType,limitPrice,notes:String(x.notes||"")});
+      const margin=n(x.margin)||100;if(!(margin>0&&margin<=1000))return sendJson(res,400,{error:"Margin must be between $1 and $1,000"});
+      const quantity=margin*leverage/entry;
+      const saved=await createTrade({symbol,side,market,entry,stop,tp1,tp2,tp3,quantity,leverage,margin,trailDistance:n(x.trailDistance),orderType,limitPrice,notes:String(x.notes||"")});
       return sendJson(res,201,{trade:tradeJson(saved)});
     }catch(e){return sendJson(res,503,{error:"Trade could not be saved to Neon",detail:e.message});}
   }
